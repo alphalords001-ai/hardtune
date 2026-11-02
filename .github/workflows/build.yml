@@ -5,9 +5,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -B build -G "Visual Studio 17 2022" -A x64
-      - run: cmake --build build --config Release --parallel
-      - uses: actions/upload-artifact@v4
+      - name: Configurer
+        run: cmake -B build -A x64
+      - name: Compiler
+        run: cmake --build build --config Release --parallel
+      - name: Publier
+        uses: actions/upload-artifact@v4
         with:
           name: HardTune-VST3-Windows
           path: build/**/VST3/*.vst3
