@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HardTune — démo hors ligne</title>
+<style>
+  :root{
+    --bg:#10131a; --panel:#171b24; --panel2:#1f2430; --line:#2a3140;
+    --acc:#2ef2a3; --acc-dim:#1a8f61; --warm:#ff5f6d; --text:#e8edf5; --dim:#8b94a7;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px; line-height:1.45;
+  }
+  header{
+    padding:18px 22px 14px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#1f2430,#10131a);
+  }
+  h1{margin:0; font-size:22px; letter-spacing:1px; color:var(--acc); font-weight:800}
+  h1 span{color:var(--text); font-weight:300}
+  header p{margin:4px 0 0; color:var(--dim); font-size:12px}
+  main{max-width:1080px; margin:0 auto; padding:18px 22px 60px}
+  section{background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:16px; margin-bottom:14px}
+  h2{font-size:11px; letter-spacing:1.4px; color:var(--dim); margin:0 0 12px; font-weight:700;
+     text-transform:uppercase}
+  .row{display:flex; gap:14px; flex-wrap:wrap; align-items:center}
+  .grow{flex:1 1 240px}
+
+  /* zone de dépôt */
+  #drop{
+    border:2px dashed var(--line); border-radius:10px; padding:26px 18px; text-align:center;
+    color:var(--dim); cursor:pointer; transition:.15s;
+  }
+  #drop:hover, #drop.over{border-color:var(--acc); color:var(--text); background:#141a22}
+  #drop b{color:var(--acc)}
+  #fileName{margin-top:10px; font-size:12px; color:var(--text); min-height:16px}
+
+  button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer;
+    font-family:inherit; transition:.12s;
+  }
+  button:hover:not(:disabled){border-color:var(--acc-dim); color:#fff}
+  button:disabled{opacity:.35; cursor:not-allowed}
+  button.primary{background:var(--acc); color:#06120c; border-color:var(--acc)}
+  button.primary:hover:not(:disabled){filter:brightness(1.1)}
+  button.on{background:var(--acc); color:#06120c; border-color:var(--acc)}
+  button.warm{background:var(--warm); color:#fff; border-color:var(--warm)}
+
+  .keys{display:grid; grid-template-columns:repeat(12,1fr); gap:4px}
+  .keys button{padding:8px 0; font-size:12px}
+  .keys button.on{background:var(--acc); color:#06120c}
+
+  label.field{display:block; margin-bottom:4px; font-size:11px; letter-spacing:1px;
+              color:var(--dim); font-weight:700}
+  .val{color:var(--acc); font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%; accent-color:var(--acc); height:22px}
+  select{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:8px; font-family:inherit; font-size:13px; width:100%;
+  }
+  canvas{width:100%; height:230px; display:block; background:#0c0f14;
+         border:1px solid var(--line); border-radius:8px}
+  .legend{display:flex; gap:18px; font-size:11px; color:var(--dim); margin-top:8px}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px}
+
+  #status{font-size:12px; color:var(--dim); min-height:18px}
+  #status b{color:var(--acc)}
+  .hint{font-size:11px; color:var(--dim); margin-top:8px}
+  .warn{color:var(--warm)}
+  footer{color:var(--dim); font-size:11px; border-top:1px solid var(--line);
+         padding-top:12px; margin-top:20px}
+  .badge{display:inline-block; background:#12241c; color:var(--acc); border:1px solid var(--acc-dim);
+         border-radius:20px; padding:2px 10px; font-size:10px; letter-spacing:1px; margin-left:8px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HARDTUNE <span>· démo hors ligne</span><span class="badge">SANS INSTALLATION</span></h1>
+  <p>Le moteur de correction, exécuté dans ton navigateur. Aucun réseau, aucun plugin, rien à installer.</p>
+</header>
+
+<main>
+
+  <section>
+    <h2>1 · Charger une voix</h2>
+    <div id="drop">
+      <b>Clique ici</b> ou dépose un fichier audio<br>
+      <small>WAV, MP3, OGG, M4A — une prise de voix chantée ou parlée</small>
+      <div id="fileName"></div>
+    </div>
+    <input type="file" id="file" accept="audio/*" hidden>
+    <div class="row" style="margin-top:12px">
+      <label style="font-size:12px;color:var(--dim)">
+        <input type="checkbox" id="limit" checked> limiter à 20 s (plus rapide)
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Réglages</h2>
+    <div class="row" style="margin-bottom:14px">
+      <div class="grow">
+        <label class="field">TONALITÉ</label>
+        <div class="keys" id="keys"></div>
+      </div>
+      <div style="flex:0 0 200px">
+        <label class="field">GAMME</label>
+        <select id="scale"></select>
+      </div>
+      <div style="flex:0 0 130px">
+        <button class="warm" id="tpain" style="width:100%;padding:11px 0">T-PAIN</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="grow">
+        <label class="field">RETUNE <span class="val" id="vRetune">0 ms</span></label>
+        <input type="range" id="retune" min="0" max="400" step="1" value="0">
+      </div>
+      <div class="grow">
+        <label class="field">AMOUNT <span class="val" id="vAmount">100 %</span></label>
+        <input type="range" id="amount" min="0" max="100" step="1" value="100">
+      </div>
+      <div class="grow">
+        <label class="field">FORMANT <span class="val" id="vFormant">0 %</span></label>
+        <input type="range" id="formant" min="-100" max="100" step="1" value="0">
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · Traiter et écouter</h2>
+    <div class="row">
+      <button class="primary" id="go" disabled>▶ TRAITER</button>
+      <button id="playOrig" disabled>Écouter l'original</button>
+      <button id="playWet" disabled>Écouter le corrigé</button>
+      <button id="stop" disabled>■ Stop</button>
+      <button id="exportBtn" disabled>⭳ Exporter le WAV</button>
+    </div>
+    <div id="status" style="margin-top:12px"></div>
+  </section>
+
+  <section>
+    <h2>4 · Ce que fait le moteur (courbe de hauteur)</h2>
+    <canvas id="viz" width="1000" height="230"></canvas>
+    <div class="legend">
+      <span><i class="dot" style="background:#8b94a7"></i>hauteur détectée (voix d'origine)</span>
+      <span><i class="dot" style="background:#2ef2a3"></i>hauteur après correction</span>
+      <span><i class="dot" style="background:#ff5f6d"></i>notes de la gamme</span>
+    </div>
+    <div class="hint" id="vizInfo"></div>
+  </section>
+
+  <footer>
+    <b>Ce que cette démo prouve :</b> la justesse de la détection, la correction sur la gamme,
+    le rendu « hard tune », l'effet du retune et du formant.<br>
+    <b>Ce qu'elle ne prouve pas :</b> l'intégration dans ton DAW, l'effet temps réel,
+    l'interface du plugin. Pour ça il faudra compiler le VST3 (docs/TEST-POUR-TOI.md).
+    <br><br>Moteur identique au C++ du plugin (mêmes algorithmes, mêmes constantes).
+    Le calcul se fait en local : ton fichier audio ne quitte jamais ton ordinateur.
+  </footer>
+</main>
+
+<script>
+/* ============================================================================
+ *  tune-core.js — moteur de correction de hauteur, portage JavaScript
+ *  du moteur C++ (PitchDetector + NoteMapper + TuneCore).
+ *
+ *  Sert à la démo navigateur : elle tourne hors ligne, sans installation.
+ *  Aucune dépendance, aucun réseau.
+ * ========================================================================== */
+(function (global) {
+  'use strict';
+
+  var NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  var SCALE_NAMES = ['Chromatic', 'Major', 'Minor', 'Harmonic Minor',
+                     'Pentatonic Maj', 'Pentatonic Min', 'Blues', 'Dorian'];
+  // masques 12 bits, identiques au C++ (bit 0 = C)
+  var SCALE_MASKS = [0xFFF, 0xAB5, 0x5AD, 0x9AD, 0x295, 0x4A9, 0x4E9, 0x6AD];
+
+  function centsToRatio(c) { return Math.pow(2, c / 1200); }
+  function ratioToCents(r) { return 1200 * Math.log2(r); }
+  function hzToMidi(h)     { return 69 + 12 * Math.log2(h / 440); }
+  function midiToHz(m)     { return 440 * Math.pow(2, (m - 69) / 12); }
+
+  function maskFor(key, scaleIndex, customMask) {
+    var base = (scaleIndex === 8) ? (customMask | 0) : SCALE_MASKS[scaleIndex];
+    // on décale pour que le masque soit exprimé relativement à la tonalité
+    var abs = 0;
+    for (var i = 0; i < 12; i++) {
+      if ((base >> i) & 1) abs |= (1 << ((i + key) % 12));
+    }
+    return abs;
+  }
+
+  function isAllowed(pc, mask) {
+    var p = ((pc % 12) + 12) % 12;
+    return ((mask >> p) & 1) !== 0;
+  }
+
+  function nearestNote(midiF, mask) {
+    var base = Math.round(midiF);
+    for (var d = 0; d <= 6; d++) {
+      if (isAllowed(base - d, mask)) return base - d;
+      if (isAllowed(base + d, mask)) return base + d;
+    }
+    return base;
+  }
+
+  /* ------------------------------------------------------------------------
+   *  Détection de hauteur (YIN)
+   * ---------------------------------------------------------------------- */
+  function detect(x, sr, hop, win) {
+    hop = hop || 512;
+    win = win || 1024;
+
+    var tauMin = Math.max(2, Math.floor(sr / 1200));
+    var tauMax = Math.min(win >> 1, Math.ceil(sr / 80));
+    var integ  = win - tauMax;
+    if (integ < 32) return [];
+
+    var d  = new Float64Array(tauMax + 2);
+    var cm = new Float64Array(tauMax + 2);
+    var frames = [];
+
+    for (var start = 0; start + win <= x.length; start += hop) {
+      var tau, j, s, a, b, diff;
+
+      for (tau = 0; tau <= tauMax; tau++) {
+        s = 0;
+        for (j = 0; j < integ; j++) {
+          a = x[start + j];
+          b = x[start + j + tau];
+          diff = a - b;
+          s += diff * diff;
+        }
+        d[tau] = s;
+      }
+
+      cm[0] = 1;
+      var run = 0;
+      for (tau = 1; tau <= tauMax; tau++) {
+        run += d[tau];
+        cm[tau] = run > 1e-20 ? (d[tau] * tau / run) : 1;
+      }
+
+      var best = -1;
+      for (tau = tauMin; tau <= tauMax; tau++) {
+        if (cm[tau] < 0.15) {
+          while (tau + 1 <= tauMax && cm[tau + 1] < cm[tau]) tau++;
+          best = tau;
+          break;
+        }
+      }
+
+      if (best < 0) {
+        var bv = 1e9;
+        for (tau = tauMin; tau <= tauMax; tau++) {
+          if (cm[tau] < bv) { bv = cm[tau]; best = tau; }
+        }
+        if (best < 0 || bv > 0.45) {
+          frames.push({ pos: start + win, hz: 0, conf: 0, voiced: false, ratio: 1 });
+          continue;
+        }
+      }
+
+      var tauRef = best;
+      if (best > tauMin && best < tauMax) {
+        var aa = cm[best - 1], bb = cm[best], cc = cm[best + 1];
+        var den = aa - 2 * bb + cc;
+        if (Math.abs(den) > 1e-20) {
+          var sh = 0.5 * (aa - cc) / den;
+          if (Math.abs(sh) < 1) tauRef += sh;
+        }
+      }
+
+      frames.push({
+        pos: start + win,
+        hz: sr / tauRef,
+        conf: Math.max(0, Math.min(1, 1 - cm[best])),
+        voiced: true,
+        ratio: 1
+      });
+    }
+    return frames;
+  }
+
+  /* ------------------------------------------------------------------------
+   *  Quantification sur la gamme
+   * ---------------------------------------------------------------------- */
+  function mapRatio(frames, opts) {
+    var mask      = maskFor(opts.key | 0, opts.scale | 0, opts.customMask | 0);
+    var amount    = opts.amount === undefined ? 1 : opts.amount;
+    var transpose = opts.transpose | 0;
+    var hop       = opts.hop || 512;
+    var sr        = opts.sr || 44100;
+
+    var alpha = 0;
+    if (opts.retuneMs > 0.5) {
+      var tauS = opts.retuneMs * 0.001;
+      alpha = Math.min(0.9999, Math.max(0, Math.exp(-hop / (tauS * sr))));
+    }
+
+    var sticky = null, smoothed = 1;
+
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      var voiced = f.hz > 0 && f.conf > 0.30;
+      f.voiced = voiced;
+
+      if (!voiced) {
+        smoothed += (1 - smoothed) * 0.25;
+        f.ratio = smoothed;
+        f.target = null;
+        continue;
+      }
+
+      var mf = hzToMidi(f.hz);
+      var cand = nearestNote(mf, mask);
+
+      if (sticky === null) {
+        sticky = cand;
+      } else if (cand !== sticky) {
+        var dC = Math.abs(mf - cand);
+        var dS = Math.abs(mf - sticky);
+        if (dS > 0.80 || dC + 0.08 < dS) sticky = cand;
+      }
+
+      var targetMidi = sticky + transpose;
+      var cents = (targetMidi - mf) * 100 * amount;
+      var target = Math.min(1.5, Math.max(0.75, centsToRatio(cents)));
+
+      smoothed = alpha * smoothed + (1 - alpha) * target;
+      f.ratio = smoothed;
+      f.target = targetMidi;
+    }
+    return frames;
+  }
+
+  /* ------------------------------------------------------------------------
+   *  Synthèse PSOLA
+   * ---------------------------------------------------------------------- */
+  function ratAt(frames, pos, fallback) {
+    // dernière frame dont la position <= pos (recherche dichotomique)
+    var lo = 0, hi = frames.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (frames[mid].pos <= pos) lo = mid + 1; else hi = mid;
+    }
+    return lo === 0 ? frames[0] : frames[lo - 1];
+  }
+
+  function synth(x, sr, frames, formant, onProgress) {
+    var n = x.length;
+    var wet  = new Float32Array(n);
+    var wsum = new Float32Array(n);
+
+    var Tmin = Math.max(4, sr / 1200);
+    var Tmax = sr / 80;
+    var F = Math.min(2, Math.max(0.5, centsToRatio((formant || 0) * 4)));  // ±1 -> ±400 cents
+
+    function read(pos) {
+      if (pos <= 0 || pos >= n - 1) return 0;
+      var i0 = pos | 0;
+      var fr = pos - i0;
+      return x[i0] + (x[i0 + 1] - x[i0]) * fr;
+    }
+
+    function bestMark(center, T) {
+      var Ti = Math.min(512, T | 0);
+      if (Ti < 16) return center;
+      var lo = center - 0.5 * T, hi = center + 0.5 * T;
+      var best = center, bestScore = -1e30;
+      for (var q = lo; q <= hi; q += 2) {
+        var sc = 0;
+        for (var j = 0; j < Ti; j++) sc += read(q + j) * read(q + j - T);
+        if (sc > bestScore) { bestScore = sc; best = q; }
+      }
+      return best;
+    }
+
+    var center = 0, lastMark = 0, hasMark = false,
+        refinePeriod = 0, prevVoiced = false,
+        lastGoodT = Tmax;
+
+    var guard = 0;
+    while (center < n && guard++ < n) {
+      var f = ratAt(frames, Math.round(center), null);
+      var voiced = f.voiced && f.hz > 0;
+      var T = voiced ? Math.min(Tmax, Math.max(Tmin, sr / f.hz)) : Math.min(Tmax, Math.max(Tmin, lastGoodT));
+      if (voiced) lastGoodT = T;
+
+      var ratio = f.ratio;
+      if (!(ratio > 0.01)) ratio = 1;
+      ratio = Math.min(1.5, Math.max(0.75, ratio));
+
+      var H = T / ratio;
+      var L = 2 * T;
+
+      // marque de pitch
+      var onset   = voiced && !prevVoiced;
+      var needRef = (!hasMark) || onset || (refinePeriod > 0 && Math.abs(T - refinePeriod) > 0.05 * refinePeriod);
+      var mark;
+      if (needRef) {
+        mark = bestMark(center, T);
+        refinePeriod = T;
+      } else {
+        var k = Math.round((center - lastMark) / T);
+        if (k < 0) k = 0;
+        mark = lastMark + k * T;
+      }
+      while (mark - center >  0.5 * T) mark -= T;
+      while (mark - center < -0.5 * T) mark += T;
+
+      lastMark = mark;
+      hasMark = voiced;
+      prevVoiced = voiced;
+
+      // écriture du grain
+      var c = Math.round(center);
+      var half = Math.round(L / 2);
+      for (var i = -half; i < half; i++) {
+        var ph = (i + half + 0.5) / (half * 2);
+        var w = 0.5 - 0.5 * Math.cos(2 * Math.PI * ph);
+        if (w <= 1e-4) continue;
+        var s = read(mark + i * F);
+        var p = c + i;
+        if (p < 0 || p >= n) continue;
+        wet[p]  += s * w;
+        wsum[p] += w;
+      }
+
+      center += H;
+      if (onProgress && (guard & 1023) === 0) onProgress(center / n);
+    }
+    if (onProgress) onProgress(1);
+
+    // normalisation + pondération voisé / dry
+    var out = new Float32Array(n);
+    var wv = 0;
+    for (var i2 = 0; i2 < n; i2++) {
+      var dry = x[i2];
+      var wetS = (wsum[i2] > 0.15) ? wet[i2] / wsum[i2] : dry;
+
+      var fr2 = ratAt(frames, i2, null);
+      var tw = fr2.voiced ? 1 : 0;
+      wv += (tw - wv) * 0.0057;   // ~4 ms à 44,1 kHz
+
+      out[i2] = dry + (wetS - dry) * wv;
+    }
+    return out;
+  }
+
+  /* ------------------------------------------------------------------------
+   *  Point d'entrée
+   * ---------------------------------------------------------------------- */
+  function process(x, sr, opts, onProgress) {
+    var hop = 512, win = 1024;
+    if (onProgress) onProgress(0);
+
+    var frames = detect(x, sr, hop, win);
+    mapRatio(frames, {
+      key: opts.key, scale: opts.scale, customMask: opts.customMask,
+      amount: opts.amount, retuneMs: opts.retuneMs,
+      transpose: opts.transpose, hop: hop, sr: sr
+    });
+
+    var out = synth(x, sr, frames, opts.formant, onProgress);
+    return { out: out, frames: frames };
+  }
+
+  var api = {
+    NOTE_NAMES: NOTE_NAMES,
+    SCALE_NAMES: SCALE_NAMES,
+    SCALE_MASKS: SCALE_MASKS,
+    process: process,
+    detect: detect,
+    mapRatio: mapRatio,
+    synth: synth,
+    hzToMidi: hzToMidi,
+    midiToHz: midiToHz,
+    ratioToCents: ratioToCents,
+    centsToRatio: centsToRatio,
+    nearestNote: nearestNote,
+    maskFor: maskFor
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  global.Tune = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var state = {
+    sr: 44100,
+    mono: null,
+    duration: 0,
+    fileName: '',
+    frames: null,
+    wet: null,
+    key: 0,
+    scale: 1,          // Major par défaut
+    ctx: null,
+    src: null,
+    playing: null
+  };
+
+  /* ---------------------------------------------------------------- UI --- */
+  var NOTE_NAMES = Tune.NOTE_NAMES;
+
+  // boutons de tonalité
+  var keysBox = $('keys');
+  NOTE_NAMES.forEach(function (n, i) {
+    var b = document.createElement('button');
+    b.textContent = n;
+    b.dataset.i = i;
+    b.onclick = function () {
+      state.key = i;
+      Array.prototype.forEach.call(keysBox.children, function (c) {
+        c.classList.toggle('on', +c.dataset.i === i);
+      });
+    };
+    keysBox.appendChild(b);
+  });
+  keysBox.children[0].classList.add('on');
+
+  // gammes
+  var scaleBox = $('scale');
+  Tune.SCALE_NAMES.forEach(function (n, i) {
+    var o = document.createElement('option');
+    o.value = i; o.textContent = n;
+    scaleBox.appendChild(o);
+  });
+  scaleBox.value = 1;
+  scaleBox.onchange = function () { state.scale = +scaleBox.value; };
+
+  function bindSlider(id, labelId, fmt) {
+    var s = $(id);
+    var update = function () { $(labelId).textContent = fmt(+s.value); };
+    s.addEventListener('input', update);
+    update();
+    return s;
+  }
+  var retuneS  = bindSlider('retune', 'vRetune', function (v) { return v + ' ms'; });
+  var amountS  = bindSlider('amount', 'vAmount', function (v) { return v + ' %'; });
+  var formantS = bindSlider('formant', 'vFormant', function (v) { return v + ' %'; });
+
+  $('tpain').onclick = function () {
+    retuneS.value = 0; retuneS.dispatchEvent(new Event('input'));
+    amountS.value = 100; amountS.dispatchEvent(new Event('input'));
+    formantS.value = 15; formantS.dispatchEvent(new Event('input'));
+    scaleBox.value = 0; state.scale = 0;   // chromatique
+  };
+
+  /* ------------------------------------------------------------ fichier --- */
+  var drop = $('drop'), fileInput = $('file');
+
+  drop.onclick = function () { fileInput.click(); };
+  fileInput.onchange = function () {
+    if (fileInput.files && fileInput.files[0]) loadFile(fileInput.files[0]);
+  };
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+
+  function audioCtx() {
+    if (!state.ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      state.ctx = new AC();
+    }
+    return state.ctx;
+  }
+
+  function loadFile(file) {
+    state.fileName = file.name;
+    $('fileName').innerHTML = '<b>' + file.name + '</b> — ' + (file.size / 1048576).toFixed(1) + ' Mo';
+    setStatus('Décodage du fichier…');
+
+    var reader = new FileReader();
+    reader.onload = function () {
+      audioCtx().decodeAudioData(reader.result).then(function (buf) {
+        var sr = buf.sampleRate;
+        var n = buf.length;
+        var mono = new Float32Array(n);
+        for (var c = 0; c < buf.numberOfChannels; c++) {
+          var d = buf.getChannelData(c);
+          for (var i = 0; i < n; i++) mono[i] += d[i] / buf.numberOfChannels;
+        }
+        state.sr = sr;
+        state.mono = mono;
+        state.duration = n / sr;
+        state.frames = null;
+        state.wet = null;
+
+        $('go').disabled = false;
+        $('playOrig').disabled = false;
+        $('exportBtn').disabled = true;
+        $('playWet').disabled = true;
+
+        setStatus('<b>' + state.duration.toFixed(1) + ' s</b> à ' + (sr / 1000).toFixed(1) +
+                  ' kHz, ' + (n / sr).toFixed(0) + ' s d\'audio chargé. Clique sur TRAITER.');
+        drawEmpty();
+      }).catch(function (e) {
+        setStatus('<span class="warn">Format audio non reconnu par ce navigateur.</span> Essaie un WAV ou un MP3.');
+        console.error(e);
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function setStatus(html) { $('status').innerHTML = html; }
+
+  /* ----------------------------------------------------------- traitement --- */
+  $('go').onclick = function () {
+    if (!state.mono) return;
+
+    var maxSamples = $('limit').checked ? Math.floor(state.sr * 20) : state.mono.length;
+    var n = Math.min(state.mono.length, maxSamples);
+    var input = state.mono.subarray(0, n);
+
+    $('go').disabled = true;
+    setStatus('Traitement en cours…');
+
+    setTimeout(function () {
+      var t0 = performance.now();
+      var res;
+      try {
+        res = Tune.process(input, state.sr, {
+          key: state.key,
+          scale: state.scale,
+          customMask: 0,
+          amount: amountS.value / 100,
+          retuneMs: +retuneS.value,
+          transpose: 0,
+          formant: formantS.value / 100
+        });
+      } catch (e) {
+        setStatus('<span class="warn">Erreur pendant le traitement : ' + e.message + '</span>');
+        $('go').disabled = false;
+        return;
+      }
+      var dt = ((performance.now() - t0) / 1000).toFixed(2);
+
+      state.wet = res.out;
+      state.frames = res.frames;
+      state.processedSamples = n;
+
+      $('go').disabled = false;
+      $('playWet').disabled = false;
+      $('exportBtn').disabled = false;
+
+      var voiced = res.frames.filter(function (f) { return f.voiced; }).length;
+      var pct = res.frames.length ? Math.round(100 * voiced / res.frames.length) : 0;
+
+      setStatus('Traitement terminé en <b>' + dt + ' s</b> · ' +
+                res.frames.length + ' analyses · ' + pct + '% voisé.<br>' +
+                'Écoute l\'original puis le corrigé, et compare.');
+
+      drawCurves(res.frames, state.sr);
+    }, 30);
+  };
+
+  /* -------------------------------------------------------------- lecture --- */
+  function stopPlayback() {
+    if (state.src) {
+      try { state.src.stop(); } catch (e) {}
+      state.src.disconnect();
+      state.src = null;
+    }
+    state.playing = null;
+    $('playOrig').classList.remove('on');
+    $('playWet').classList.remove('on');
+  }
+
+  function playBuffer(data, which) {
+    stopPlayback();
+    var ctx = audioCtx();
+    if (ctx.state === 'suspended') ctx.resume();
+
+    var buf = ctx.createBuffer(1, data.length, state.sr);
+    buf.copyToChannel(data, 0);
+
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = function () { stopPlayback(); };
+    src.start();
+
+    state.src = src;
+    state.playing = which;
+    $(which === 'orig' ? 'playOrig' : 'playWet').classList.add('on');
+  }
+
+  $('playOrig').onclick = function () {
+    var n = state.processedSamples || state.mono.length;
+    playBuffer(state.mono.subarray(0, n), 'orig');
+  };
+  $('playWet').onclick = function () {
+    if (state.wet) playBuffer(state.wet, 'wet');
+  };
+  $('stop').onclick = stopPlayback;
+
+  /* --------------------------------------------------------------- export --- */
+  $('exportBtn').onclick = function () {
+    if (!state.wet) return;
+    var blob = encodeWav(state.wet, state.sr);
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'hardtune-' + (state.fileName.replace(/\.[^.]+$/, '') || 'sortie') + '.wav';
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  };
+
+  function encodeWav(samples, sr) {
+    var buf = new ArrayBuffer(44 + samples.length * 2);
+    var v = new DataView(buf);
+    function str(off, s) { for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE');
+    str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+    var off = 44;
+    for (var i = 0; i < samples.length; i++) {
+      var s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      off += 2;
+    }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  /* ----------------------------------------------------------- graphique --- */
+  var canvas = $('viz'), g = canvas.getContext('2d');
+
+  function clearCanvas() {
+    var w = canvas.width, h = canvas.height;
+    g.fillStyle = '#0c0f14'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#1a1f28'; g.lineWidth = 1;
+    for (var y = 0; y < h; y += h / 6) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  }
+
+  function drawEmpty() {
+    clearCanvas();
+    g.fillStyle = '#3a4250';
+    g.font = '13px -apple-system,Segoe UI,sans-serif';
+    g.textAlign = 'center';
+    g.fillText('La courbe de hauteur apparaîtra ici après traitement', canvas.width / 2, canvas.height / 2);
+    $('vizInfo').textContent = '';
+  }
+
+  function drawCurves(frames, sr) {
+    clearCanvas();
+    if (!frames.length) return;
+
+    var w = canvas.width, h = canvas.height;
+    var pad = 26;
+    var tMax = frames[frames.length - 1].pos / sr;
+
+    // plage de hauteurs : de 60 Hz à 1200 Hz (échelle log)
+    function x(t) { return pad + (t / tMax) * (w - 2 * pad); }
+    function y(hz) {
+      var lo = Math.log2(70), hi = Math.log2(1100);
+      var v = (Math.log2(Math.max(70, Math.min(1100, hz))) - lo) / (hi - lo);
+      return h - pad - v * (h - 2 * pad);
+    }
+
+    // lignes d'octave
+    g.strokeStyle = '#1a1f28';
+    [110, 220, 440, 880].forEach(function (hz) {
+      g.beginPath(); g.moveTo(pad, y(hz)); g.lineTo(w - pad, y(hz)); g.stroke();
+      g.fillStyle = '#3a4250';
+      g.font = '10px monospace';
+      g.textAlign = 'left';
+      g.fillText(hz + ' Hz', 3, y(hz) - 3);
+    });
+
+    // courbe détectée
+    g.strokeStyle = '#8b94a7'; g.lineWidth = 1.6; g.beginPath();
+    var started = false;
+    frames.forEach(function (f) {
+      if (!f.voiced || f.hz <= 0) { started = false; return; }
+      var X = x(f.pos / sr), Y = y(f.hz);
+      if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+    });
+    g.stroke();
+
+    // courbe corrigée
+    g.strokeStyle = '#2ef2a3'; g.lineWidth = 2; g.beginPath();
+    started = false;
+    frames.forEach(function (f) {
+      if (!f.voiced || f.hz <= 0) { started = false; return; }
+      var X = x(f.pos / sr), Y = y(f.hz * f.ratio);
+      if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+    });
+    g.stroke();
+
+    // notes de la gamme
+    var mask = Tune.maskFor(state.key, state.scale, 0);
+    g.strokeStyle = 'rgba(255,95,109,0.28)';
+    g.lineWidth = 1;
+    for (var m = 36; m <= 96; m++) {
+      var pc = ((m % 12) + 12) % 12;
+      if ((mask >> pc) & 1) {
+        var Y2 = y(Tune.midiToHz(m));
+        g.beginPath(); g.moveTo(pad, Y2); g.lineTo(w - pad, Y2); g.stroke();
+      }
+    }
+
+    var voicedCount = frames.filter(function (f) { return f.voiced; }).length;
+    $('vizInfo').textContent = tMax.toFixed(1) + ' s analysées · ' +
+      voicedCount + '/' + frames.length + ' trames voisées · gamme : ' +
+      Tune.SCALE_NAMES[state.scale] + ' en ' + Tune.NOTE_NAMES[state.key];
+  }
+
+  drawEmpty();
+})();
+</script>
+</body>
+</html>
