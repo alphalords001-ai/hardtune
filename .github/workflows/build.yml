@@ -5,12 +5,116 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Configurer
         run: cmake -B build -A x64
+
       - name: Compiler
         run: cmake --build build --config Release --parallel
+
+      # -----------------------------------------------------------------------
+      #  Un rapport de crash FL Studio donne : "in module HardTune.vst3
+      #  (offset D5356)". Ce fichier .map traduit cet offset en nom de fonction.
+      #  Les résultats sont publiés en annotations, lisibles via l'API GitHub.
+      # -----------------------------------------------------------------------
+      - name: Traduire les offsets de plantage en fonctions
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          # Offsets relevés dans les rapports de crash réels
+          $targets = @(0xD5356, 0xD5346, 0xA77C2, 0xA73DA)
+
+          $maps = Get-ChildItem build -Recurse -Filter *.map -ErrorAction SilentlyContinue
+          if (-not $maps) {
+            Write-Host "::warning title=HardTune symbols::Aucun fichier .map produit par l'edition de liens"
+            Get-ChildItem build -Recurse -Include *.dll,*.vst3 -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
+            exit 0
+          }
+
+          foreach ($map in $maps) {
+            Write-Host "=== $($map.FullName) ($([math]::Round($map.Length/1MB,2)) Mo) ==="
+
+            $base = [uint64]0
+            $lines = @(Get-Content $map.FullName)
+            foreach ($l in $lines) {
+              if ($l -match 'Preferred load address is\s+([0-9A-Fa-f]+)') { $base = [Convert]::ToUInt64($Matches[1], 16); break }
+            }
+            Write-Host "base preferee = 0x$($base.ToString('X'))"
+
+            $syms = New-Object System.Collections.ArrayList
+            foreach ($l in $lines) {
+              if ($l -match '^\s+([0-9A-Fa-f]{4}):([0-9A-Fa-f]{8})\s+(\S+)\s+([0-9A-Fa-f]{16})\s+(.*)$') {
+                $va = [Convert]::ToUInt64($Matches[4], 16)
+                if ($va -ge $base) {
+                  [void]$syms.Add([pscustomobject]@{
+                    Rva  = [uint64]($va - $base)
+                    Name = $Matches[3]
+                    Obj  = $Matches[5].Trim()
+                  })
+                }
+              }
+            }
+            Write-Host "$($syms.Count) symboles publics lus"
+            $sorted = $syms | Sort-Object Rva
+
+            foreach ($t in $targets) {
+              $cand = $sorted | Where-Object { $_.Rva -le [uint64]$t } | Select-Object -Last 1
+              if ($cand) {
+                $delta = [uint64]$t - $cand.Rva
+                $msg = "0x$($t.ToString('X')) -> $($cand.Name) +0x$($delta.ToString('X'))   [$($cand.Obj)]"
+              } else {
+                $msg = "0x$($t.ToString('X')) -> (aucun symbole avant cet offset)"
+              }
+              Write-Host "HT-RESOLVE $msg"
+              Write-Host "::warning title=HardTune offset::$msg"
+            }
+
+            # Le contexte : les 8 symboles qui encadrent le point de plantage
+            $near = $sorted | Where-Object { $_.Rva -ge 0xD4000 -and $_.Rva -le 0xD6000 }
+            foreach ($n in $near) {
+              Write-Host ("HT-NEAR 0x{0:X}  {1}   [{2}]" -f $n.Rva, $n.Name, $n.Obj)
+            }
+          }
+
+          # Deuxième avis : llvm-symbolizer s'il est présent (lit le PDB)
+          $dll = Get-ChildItem build -Recurse -Filter HardTune.vst3 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -notlike '*Standalone*' } | Select-Object -First 1
+          if ($dll) {
+            Write-Host "DLL: $($dll.FullName) ($([math]::Round($dll.Length/1MB,2)) Mo)"
+            $llvm = $null
+            foreach ($p in @("C:\Program Files\LLVM\bin\llvm-symbolizer.exe",
+                             "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin\llvm-symbolizer.exe",
+                             "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\llvm-symbolizer.exe")) {
+              if (Test-Path $p) { $llvm = $p; break }
+            }
+            if ($llvm) {
+              Write-Host "llvm-symbolizer: $llvm"
+              foreach ($t in $targets) {
+                $addr = '0x{0:X}' -f (0x180000000 + $t)
+                $out = & $llvm --obj=$($dll.FullName) --functions=linkage --demangle $addr 2>&1 | Out-String
+                Write-Host "HT-LLVM $addr => $($out.Trim())"
+                Write-Host "::warning title=HardTune llvm::$($t.ToString('X')) => $($out.Trim() -replace '\r?\n',' | ')"
+              }
+            } else {
+              Write-Host "llvm-symbolizer introuvable"
+            }
+          }
+
       - name: Publier
         uses: actions/upload-artifact@v4
         with:
           name: HardTune-VST3-Windows
           path: build/**/VST3/*.vst3
+
+      - name: Publier les symboles (map + pdb)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HardTune-symboles
+          if-no-files-found: warn
+          path: |
+            build/**/*.map
+            build/**/*.pdb

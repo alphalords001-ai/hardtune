@@ -34,6 +34,8 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+    try
+    {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
 
@@ -78,7 +80,12 @@ public:
         g.fillEllipse (face);
         g.setColour (pal.knobEdge);
         g.drawEllipse (face, 1.0f);
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -101,6 +108,8 @@ public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
 
     void paint (juce::Graphics& g) override
+    {
+    try
     {
         auto b = getLocalBounds().toFloat();
         const float h = 12.0f;
@@ -137,7 +146,12 @@ public:
         g.fillEllipse (knob);
         g.setColour (pal.accentDark);
         g.drawEllipse (knob, 1.6f);
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -158,6 +172,8 @@ public:
     void setCompact (bool c) { compact = c; resized(); }
 
     void paintButton (juce::Graphics& g, bool over, bool) override
+    {
+    try
     {
         auto b = getLocalBounds().toFloat().reduced (0.5f);
         const float r = b.getHeight() * 0.5f;
@@ -194,7 +210,12 @@ public:
                                  juce::Colour (0xffdde8f0), knob.getRight(), knob.getBottom(), false);
         g.setGradientFill (kg);
         g.fillEllipse (knob);
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -217,6 +238,8 @@ public:
     }
 
     void paint (juce::Graphics& g) override
+    {
+    try
     {
         auto r = getLocalBounds().toFloat();
         if (r.getWidth() < 12.0f || r.getHeight() < 12.0f)
@@ -261,7 +284,12 @@ public:
                 g.fillEllipse (keyRect.getCentreX() - 4.6f, keyRect.getBottom() - 22.0f, 9.2f, 9.2f);
             }
         }
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
     static juce::String nameFor (int i)
     {
@@ -294,6 +322,8 @@ public:
     }
 
     void paint (juce::Graphics& g) override
+    {
+    try
     {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
@@ -375,7 +405,12 @@ public:
         g.drawText (juce::String::fromUTF8 ("\xc2\xa2"),
                     getLocalBounds().withTrimmedTop ((int) (d * 0.30f)),
                     juce::Justification::centredTop, false);
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -402,6 +437,8 @@ public:
     }
 
     void paint (juce::Graphics& g) override
+    {
+    try
     {
         auto b = getLocalBounds().toFloat();
         if (b.getWidth() < 8.0f || b.getHeight() < 8.0f)
@@ -452,7 +489,12 @@ public:
         g.setColour (pal.accentDark);
         g.strokePath (curve, juce::PathStrokeType (2.4f,
                        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -476,6 +518,8 @@ public:
     }
 
     void paint (juce::Graphics& g) override
+    {
+    try
     {
         auto b = getLocalBounds();
         if (b.getWidth() < 24 || b.getHeight() < 24)
@@ -510,7 +554,12 @@ public:
         auto f = getLocalBounds().removeFromBottom (14);
         g.drawText ("PEAK", f.getX() + 22, f.getY(), 40, 14, juce::Justification::centredLeft, false);
         g.drawText ("RMS",  f.getX() + 22 + barW + gap, f.getY(), 40, 14, juce::Justification::centredLeft, false);
+        }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
+}
 
 private:
     void drawBar (juce::Graphics& g, juce::Rectangle<int> r, float db)

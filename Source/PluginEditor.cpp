@@ -277,6 +277,8 @@ void HardTuneEditor::drawCard (Graphics& g, Rectangle<int> r) const
 
 void HardTuneEditor::paint (Graphics& g)
 {
+    try
+    {
     auto b = getLocalBounds().toFloat();
 
     ColourGradient bg (pal.win1, b.getX(), b.getY(), pal.win2, b.getX(), b.getBottom(), false);
@@ -316,6 +318,11 @@ void HardTuneEditor::paint (Graphics& g)
         corner (rf.getRight() - 11.0f, rf.getY() + 11.0f, -1.0f,  1.0f);
         corner (rf.getX() + 11.0f,  rf.getBottom() - 11.0f,  1.0f, -1.0f);
         corner (rf.getRight() - 11.0f, rf.getBottom() - 11.0f, -1.0f, -1.0f);
+    }
+    }
+    catch (...)
+    {
+        // jamais de crash dans l'hote : on laisse la zone telle quelle
     }
 }
 

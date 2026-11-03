@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HardTune VERSION 0.5.2 LANGUAGES C CXX)
+project(HardTune VERSION 0.5.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,7 +60,7 @@ juce_add_plugin(HardTune
     BUNDLE_ID                   "org.hardtune.plugin"
     PLUGIN_MANUFACTURER_CODE    Htun
     PLUGIN_CODE                 Ht01
-    VERSION                     0.5.2
+    VERSION                     0.5.3
     FORMATS                     VST3 Standalone
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -114,6 +114,35 @@ add_executable(hardtune_dsp_tests
 target_include_directories(hardtune_dsp_tests PRIVATE Source/dsp)
 target_compile_features(hardtune_dsp_tests PRIVATE cxx_std_17)
 target_link_libraries(hardtune_dsp_tests PRIVATE rubberband_single)
+
+# ---------------------------------------------------------------------------
+#  MSVC : deux réglages indispensables pour ne PLUS faire tomber le DAW
+#
+#  1. /EHa à la place de /EHsc (imposé par JUCE) : en /EHsc, un "access
+#     violation" (déréférencement de pointeur nul, par exemple) n'est PAS une
+#     exception C++ : catch (...) ne l'attrape pas et l'hôte se ferme. En /EHa,
+#     nos try/catch le rattrapent et le plugin reste en vie.
+#  2. /MAP : le fichier .map permet de traduire l'offset d'un rapport de crash
+#     ("in module HardTune.vst3, offset D5356") en nom de fonction.
+# ---------------------------------------------------------------------------
+if (MSVC)
+    if (TARGET juce_recommended_config_flags)
+        get_target_property (ht_flags juce_recommended_config_flags INTERFACE_COMPILE_OPTIONS)
+        if (ht_flags)
+            list (TRANSFORM ht_flags REPLACE "^/EHsc$" "/EHa")
+            set_target_properties (juce_recommended_config_flags
+                                   PROPERTIES INTERFACE_COMPILE_OPTIONS "${ht_flags}")
+        endif()
+    endif()
+
+    foreach (ht_target HardTune HardTune_VST3 HardTune_Standalone)
+        if (TARGET ${ht_target})
+            target_link_options (${ht_target} PRIVATE
+                "/MAP:$<TARGET_FILE_DIR:${ht_target}>/HardTune-${ht_target}.map"
+                /MAPINFO:EXPORTS)
+        endif()
+    endforeach()
+endif()
 
 # ---------------------------------------------------------------------------
 #  Compilation Linux : compatibilité des vieilles distributions (glibc)
