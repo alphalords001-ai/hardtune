@@ -19,6 +19,15 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 # ---------------------------------------------------------------------------
+#  Windows : les macros min/max de Windows.h cassent les std::max(...) de
+#  Rubber Band (erreur MSVC C2589 « illegal token on right side of '::' »).
+#  NOMINMAX les supprime : c'est la correction officielle de ce problème.
+# ---------------------------------------------------------------------------
+if (WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
+# ---------------------------------------------------------------------------
 #  Rubber Band Library (moteur de transposition, licence GPL v2+)
 #  Version "fichier unique" : aucun système de build à gérer, un seul .cpp.
 # ---------------------------------------------------------------------------
@@ -32,6 +41,8 @@ FetchContent_MakeAvailable(rubberband)
 add_library(rubberband_single STATIC
     ${rubberband_SOURCE_DIR}/single/RubberBandSingle.cpp)
 target_include_directories(rubberband_single PUBLIC ${rubberband_SOURCE_DIR})
+# ceinture et bretelles : ces deux macros doivent être définies pour ce fichier
+target_compile_definitions(rubberband_single PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_features(rubberband_single PUBLIC cxx_std_17)
 set_target_properties(rubberband_single PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
