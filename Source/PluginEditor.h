@@ -19,6 +19,13 @@ public:
 
 private:
     void timerCallback() override;
+
+    /** Corps du timer : appelé sous try/catch, ne doit jamais laisser passer d'exception. */
+    void refreshFromProcessor();
+
+    /** Lecture tolérante d'un paramètre (getRawParameterValue peut renvoyer nullptr). */
+    float paramValue (const char* id, float fallback = 0.0f) const;
+
     void applyTheme();
     void drawCard (juce::Graphics&, juce::Rectangle<int>) const;
 

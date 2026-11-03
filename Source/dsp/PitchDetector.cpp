@@ -39,6 +39,14 @@ void PitchDetector::setRange (double lo, double hi)
 
 void PitchDetector::process (const float* mono, int numSamples, std::vector<Estimate>& out)
 {
+    // Sans prepare(), `tail` est vide : le memmove ci-dessous partirait d'un
+    // pointeur nul ("Read of address 0x0").
+    if (mono == nullptr || numSamples <= 0)
+        return;
+
+    if (tail.size() < (size_t) windowSize || hopSize <= 0 || windowSize <= hopSize)
+        return;
+
     carry.insert (carry.end(), mono, mono + numSamples);
 
     while ((int) carry.size() >= hopSize)

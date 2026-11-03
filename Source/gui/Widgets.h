@@ -36,6 +36,10 @@ public:
     {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
+
+        if (d < 8.0f)      // composant de taille nulle/absurde : rien a dessiner
+            return;
+
         const float sw = juce::jmax (5.0f, d * 0.105f);
         const float R  = d * 0.5f - sw * 0.5f - 1.0f;
         const auto  c  = b.getCentre();
@@ -215,6 +219,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
+        if (r.getWidth() < 12.0f || r.getHeight() < 12.0f)
+            return;
+
         const int n = 12;
         const float w = r.getWidth() / (float) n;
 
@@ -290,6 +297,10 @@ public:
     {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
+
+        if (d < 16.0f)     // taille nulle -> rayon negatif et police de hauteur 0
+            return;
+
         const float sw = d * 0.085f;
         const float R  = d * 0.5f - sw * 0.5f - 16.0f;
         const auto  c  = b.getCentre();
@@ -393,6 +404,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
+        if (b.getWidth() < 8.0f || b.getHeight() < 8.0f)
+            return;
+
         g.setColour (pal.dark ? pal.card2 : juce::Colour (0xfff7fbfe));
         g.fillRoundedRectangle (b, 9.0f);
         g.setColour (pal.cardEdge.withAlpha (0.8f));
@@ -464,6 +478,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds();
+        if (b.getWidth() < 24 || b.getHeight() < 24)
+            return;
+
         g.setColour (pal.inkSoft);
         g.setFont (font (11.0f, true));
         g.drawText (title.toUpperCase(), b.removeFromTop (16), juce::Justification::centred, false);

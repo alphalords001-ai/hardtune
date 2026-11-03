@@ -66,36 +66,62 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
     maxBlock  = std::max (32, maximumBlockSize);
     numChannels = std::max (1, std::min (2, channels));
 
-    stretcher = std::make_unique<RubberBand::RubberBandStretcher> (
-        (size_t) std::lround (sr),
-        (size_t) numChannels,
-        kOptions,
-        1.0,        // time ratio (aucun changement de durée)
-        1.0);       // pitch scale
+    // Tant que tout n'est pas pret, process() ne doit rien faire : un etat a
+    // moitie construit (tampon vide, stretcher nul) donnerait un pointeur nul
+    // au premier bloc audio.
+    ready = false;
 
-    stretcher->setMaxProcessSize ((size_t) maxBlock);
-    stretcher->setTimeRatio (1.0);
-    stretcher->setPitchScale (1.0);
-    stretcher->setFormantScale (1.0);
+    try
+    {
+        auto newStretcher = std::make_unique<RubberBand::RubberBandStretcher> (
+            (size_t) std::lround (sr),
+            (size_t) numChannels,
+            kOptions,
+            1.0,        // time ratio (aucun changement de durée)
+            1.0);       // pitch scale
 
-    latency = (int) stretcher->getLatency();
+        newStretcher->setMaxProcessSize ((size_t) maxBlock);
+        newStretcher->setTimeRatio (1.0);
+        newStretcher->setPitchScale (1.0);
+        newStretcher->setFormantScale (1.0);
 
-    detector.setRange (80.0, 1200.0);
-    detector.prepare (sr, 1024, kHop);
+        const int newLatency = (int) newStretcher->getLatency();
 
-    // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
-    int size = 1;
-    while (size < latency + maxBlock + 64) size <<= 1;
-    dryMask = size - 1;
-    dryDelay.assign ((size_t) size * (size_t) numChannels, 0.0f);
+        detector.setRange (80.0, 1200.0);
+        detector.prepare (sr, 1024, kHop);
 
-    tmpWet.assign ((size_t) maxBlock * 2 + 2, 0.0f);
+        // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
+        int size = 1;
+        while (size < newLatency + maxBlock + 64) size <<= 1;
 
-    frames.clear();
-    frames.reserve (512);
-    estimates.reserve (64);
+        std::vector<float> newDry ((size_t) size * (size_t) numChannels, 0.0f);
+        std::vector<float> newWet ((size_t) maxBlock * 2 + 2, 0.0f);
 
-    reset();
+        // --- publication (aucune allocation apres ce point) -----------------
+        stretcher = std::move (newStretcher);
+        latency   = newLatency;
+        dryMask   = size - 1;
+        dryDelay  = std::move (newDry);
+        tmpWet    = std::move (newWet);
+
+        frames.clear();
+        frames.reserve (512);
+        estimates.reserve (64);
+
+        reset();
+        ready = true;
+    }
+    catch (...)
+    {
+        // echec (memoire, initialisation de Rubber Band...) : moteur inactif,
+        // le plugin reste transparent au lieu de faire tomber l'hote.
+        stretcher.reset();
+        dryDelay.clear();
+        tmpWet.clear();
+        dryMask = 0;
+        latency = 0;
+        ready   = false;
+    }
 }
 
 void TuneCore::reset()
@@ -224,10 +250,18 @@ double TuneCore::formantRatio() const
 // ============================================================================
 void TuneCore::process (const float* const* in, float* const* out, int numSamples, int channels)
 {
-    if (numSamples <= 0 || stretcher == nullptr || in == nullptr || out == nullptr)
+    if (numSamples <= 0 || ! ready || stretcher == nullptr || in == nullptr || out == nullptr)
         return;
 
     if (in[0] == nullptr || out[0] == nullptr)
+        return;
+
+    // Les tampons doivent avoir exactement la taille annoncee par prepare() :
+    // un etat incoherent ici veut dire pointeur nul ou debordement plus loin.
+    if (maxBlock < 1
+        || tmpWet.size() < (size_t) maxBlock * 2
+        || dryDelay.size() < (size_t) (dryMask + 1)
+        || (int) dryDelay.size() < (dryMask + 1) * std::max (1, std::min (2, numChannels)))
         return;
 
     // Combien de canaux le moteur peut-il vraiment traiter ?

@@ -101,6 +101,7 @@ private:
     double sr = 48000.0;
     int    maxBlock = 512;
     int    numChannels = 1;
+    std::atomic<bool> ready { false };   // prepare() a reussi : process() peut travailler
     Params params;
 
     // --- synthèse -----------------------------------------------------------

@@ -86,6 +86,11 @@ void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     // une piste vide, sampleRate 0 pendant le scan...). On borne, et surtout on
     // ne laisse AUCUNE exception remonter : sur Windows, une exception qui
     // traverse l'interface VST3 ferme le DAW sans message.
+    // Les tampons du moteur sont realloues ici : si l'hote appelait prepareToPlay
+    // pendant un bloc audio (certains le font au demarrage de la lecture), le
+    // fil audio lirait de la memoire liberee. Le verrou rend les deux exclusifs.
+    const juce::ScopedLock sl (getCallbackLock());
+
     currentSampleRate = (sampleRate > 0.0 ? sampleRate : 44100.0);
     currentBlockSize  = juce::jmax (16, samplesPerBlock);
 
@@ -194,6 +199,8 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midi);
 
+    const juce::ScopedLock sl (getCallbackLock());
+
     const int numSamples  = buffer.getNumSamples();
     const int numChannels = buffer.getNumChannels();
 
@@ -261,15 +268,23 @@ void HardTuneProcessor::copyCents (float* dest) const noexcept
 // ---------------------------------------------------------------------------
 void HardTuneProcessor::getStateInformation (MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
-        copyXmlToBinary (*xml, destData);
+    try
+    {
+        if (auto xml = apvts.copyState().createXml())
+            copyXmlToBinary (*xml, destData);
+    }
+    catch (...) {}
 }
 
 void HardTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (ValueTree::fromXml (*xml));
+    try
+    {
+        if (auto xml = getXmlFromBinary (data, sizeInBytes))
+            if (xml->hasTagName (apvts.state.getType()))
+                apvts.replaceState (ValueTree::fromXml (*xml));
+    }
+    catch (...) {}
 }
 
 // ---------------------------------------------------------------------------

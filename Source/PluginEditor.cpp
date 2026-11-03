@@ -468,6 +468,33 @@ void HardTuneEditor::resized()
 // ---------------------------------------------------------------------------
 void HardTuneEditor::timerCallback()
 {
+    // Le timer tourne sur le fil d'interface. Une exception ou un pointeur nul
+    // ici fait tomber l'hote tout entier (le plugin tourne dans son processus) :
+    // on ne laisse donc jamais rien s'echapper.
+    try
+    {
+        refreshFromProcessor();
+    }
+    catch (...)
+    {
+        // on garde l'interface figee plutot que de tuer le DAW
+    }
+}
+
+// Lit un parametre sans jamais dereferencer un pointeur nul : getRawParameterValue
+// peut renvoyer nullptr (identifiant absent, etat restaure d'une autre version,
+// APVTS en cours de remplacement). C'etait le seul pointeur brut lu par
+// l'interface, et un nullptr y donne exactement "Read of address 0x0".
+float HardTuneEditor::paramValue (const char* id, float fallback) const
+{
+    if (auto* p = proc.apvts.getRawParameterValue (id))
+        return p->load();
+
+    return fallback;
+}
+
+void HardTuneEditor::refreshFromProcessor()
+{
     // thème (interrupteur LIGHT / DARK)
     static bool lastDark = false;
     if (darkSwitch.getToggleState() != lastDark)
@@ -493,8 +520,8 @@ void HardTuneEditor::timerCallback()
     }
 
     // clavier
-    const int keyIndex   = (int) proc.apvts.getRawParameterValue (HardTuneProcessor::kKey)->load();
-    const int scaleIndex = (int) proc.apvts.getRawParameterValue (HardTuneProcessor::kScale)->load();
+    const int keyIndex   = (int) paramValue (HardTuneProcessor::kKey);
+    const int scaleIndex = (int) paramValue (HardTuneProcessor::kScale);
     unsigned mask = tune::NoteMapper::scaleMask (
         (tune::NoteMapper::Scale) jlimit (0, (int) tune::NoteMapper::NumScales - 1, scaleIndex));
     keys.setState (voiced ? target : -1, voiced, keyIndex, mask);
@@ -512,7 +539,7 @@ void HardTuneEditor::timerCallback()
     }
 
     // valeurs écrites à côté des boutons
-    auto raw = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+    auto raw = [this] (const char* id) { return paramValue (id); };
     retuneValue.setText (String ((int) std::lround (raw (HardTuneProcessor::kRetune))) + " ms",
                          dontSendNotification);
     humanizeValue.setText (String ((int) std::lround (raw (HardTuneProcessor::kHumanize))) + " %",
