@@ -67,7 +67,7 @@ sur GitHub, comme d'habitude.
 
 ## 5. Ce que tu dois regarder en premier
 
-1. La fenêtre **s'ouvre-t-elle à la bonne taille** (960 × 1050) ?
+1. La fenêtre **s'ouvre-t-elle à la bonne taille** (820 × 600) ?
 2. Le **clavier** réagit-il quand tu chantes (la touche visée s'allume) ?
 3. Le **gros cadran** bouge-t-il (l'arc bleu et le chiffre au centre) ?
 4. Les **2 vu-mètres** montent-ils quand tu chantes ?

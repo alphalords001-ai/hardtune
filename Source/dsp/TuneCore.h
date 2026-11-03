@@ -93,6 +93,10 @@ private:
     double currentRatio() const;
     double formantRatio() const;
 
+    /** Traite une tranche de maxBlock samples au maximum (offset dans le bloc hôte). */
+    void   processChunk (const float* const* in, float* const* out, int offset,
+                         int numSamples, int channels);
+
     // --- configuration ------------------------------------------------------
     double sr = 48000.0;
     int    maxBlock = 512;

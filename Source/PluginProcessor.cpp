@@ -82,14 +82,32 @@ HardTuneProcessor::HardTuneProcessor()
 
 void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    currentSampleRate = sampleRate;
-    currentBlockSize  = samplesPerBlock;
+    // Un hote peut appeler prepareToPlay avec des valeurs limites (0 canal sur
+    // une piste vide, sampleRate 0 pendant le scan...). On borne, et surtout on
+    // ne laisse AUCUNE exception remonter : sur Windows, une exception qui
+    // traverse l'interface VST3 ferme le DAW sans message.
+    currentSampleRate = (sampleRate > 0.0 ? sampleRate : 44100.0);
+    currentBlockSize  = juce::jmax (16, samplesPerBlock);
 
-    const int channels = juce::jmax (1, getTotalNumInputChannels());
-    core.prepare (sampleRate, samplesPerBlock, channels);
-    setLatencySamples (core.latencySamples());
+    const int channels = juce::jlimit (1, 2, juce::jmax (1, getTotalNumInputChannels()));
 
-    syncEngineFromParameters();
+    try
+    {
+        core.prepare (currentSampleRate, currentBlockSize, channels);
+        setLatencySamples (core.latencySamples());
+        syncEngineFromParameters();
+    }
+    catch (const std::exception& e)
+    {
+        // Le plugin reste charge et transparent plutot que de tuer l'hote.
+        DBG ("HardTune: prepareToPlay a echoue - " << e.what());
+        try { core.prepare (currentSampleRate, 512, 1); } catch (...) {}
+        setLatencySamples (0);
+    }
+    catch (...)
+    {
+        setLatencySamples (0);
+    }
 }
 
 bool HardTuneProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -120,23 +138,33 @@ void HardTuneProcessor::setParamValue (const juce::String& id, float value)
 // ---------------------------------------------------------------------------
 void HardTuneProcessor::syncEngineFromParameters()
 {
-    const int keyIndex   = apvts.getRawParameterValue (kKey)->load();
-    const int scaleIndex = apvts.getRawParameterValue (kScale)->load();
+    // Lecture tolerante : si un identifiant n'existe pas (ancien preset, etat
+    // restaure d'une version precedente), on retombe sur une valeur par defaut
+    // au lieu de dereferencer un pointeur nul.
+    auto raw = [this] (const juce::String& id, float fallback = 0.0f) -> float
+    {
+        if (auto* p = apvts.getRawParameterValue (id))
+            return p->load();
+        return fallback;
+    };
+
+    const int keyIndex   = (int) raw (kKey);
+    const int scaleIndex = (int) raw (kScale);
 
     tune::TuneCore::Params p;
-    const bool corrOn = apvts.getRawParameterValue (kCorrection)->load() > 0.5f;
-    p.amount       = corrOn ? apvts.getRawParameterValue (kAmount)->load() * 0.01f : 0.0f;
-    p.retuneMs     = apvts.getRawParameterValue (kRetune)->load();
-    p.formant      = apvts.getRawParameterValue (kFormant)->load() * 0.01f;
-    p.humanize     = apvts.getRawParameterValue (kHumanize)->load() * 0.01f;
-    p.vibrato      = apvts.getRawParameterValue (kVibrato)->load()  * 0.01f;
-    p.vibratoHz    = apvts.getRawParameterValue (kVibRate)->load();
+    const bool corrOn = raw (kCorrection, 1.0f) > 0.5f;
+    p.amount       = corrOn ? raw (kAmount, 100.0f) * 0.01f : 0.0f;
+    p.retuneMs     = raw (kRetune);
+    p.formant      = raw (kFormant) * 0.01f;
+    p.humanize     = raw (kHumanize, 32.0f) * 0.01f;
+    p.vibrato      = raw (kVibrato, 20.0f) * 0.01f;
+    p.vibratoHz    = raw (kVibRate, 6.0f);
     p.mix          = 1.0f;                       // plus de MIX : il doublait la voix
-    p.outputGainDb = apvts.getRawParameterValue (kOutput)->load();
-    p.transpose    = (int) apvts.getRawParameterValue (kTranspose)->load();
-    p.bypass       = apvts.getRawParameterValue (kBypass)->load() > 0.5f;
+    p.outputGainDb = raw (kOutput);
+    p.transpose    = (int) raw (kTranspose);
+    p.bypass       = raw (kBypass) > 0.5f;
 
-    const bool customOn = apvts.getRawParameterValue (kCustomOn)->load() > 0.5f;
+    const bool customOn = raw (kCustomOn) > 0.5f;
 
     {
         core.setParams (p);
@@ -148,7 +176,7 @@ void HardTuneProcessor::syncEngineFromParameters()
         {
             unsigned mask = 0u;
             for (int i = 0; i < 12; ++i)
-                if (apvts.getRawParameterValue (String (kNotePrefix) + String (i))->load() > 0.5f)
+                if (raw (String (kNotePrefix) + String (i), 1.0f) > 0.5f)
                     mask |= (1u << i);
             if (mask == 0u) mask = 0xFFFu;
             mapper.setCustomMask (mask);
@@ -166,13 +194,21 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midi);
 
-    syncEngineFromParameters();
-
-    const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
+    const int numChannels = buffer.getNumChannels();
 
-    if (numSamples <= 0)
+    // Rien a traiter, ou tampon sans canal : ne jamais demander getReadPointer(0).
+    if (numSamples <= 0 || numChannels <= 0)
         return;
+
+    try
+    {
+        syncEngineFromParameters();
+    }
+    catch (...)
+    {
+        return;
+    }
 
     // Un seul moteur pour tous les canaux : gauche et droite sont traitées
     // ensemble, donc un signal mono reste parfaitement mono.
@@ -183,7 +219,14 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
                                 numChannels > 1 ? buffer.getWritePointer (1)
                                                 : buffer.getWritePointer (0) };
 
-    core.process (inPtrs, outPtrs, numSamples, numChannels);
+    try
+    {
+        core.process (inPtrs, outPtrs, numSamples, numChannels);
+    }
+    catch (...)
+    {
+        return;   // on laisse le tampon tel quel : silence plutot que plantage
+    }
 
     // ---- oscilloscope : on ne garde qu'un point sur N pour ne pas saturer ----
     {
@@ -232,7 +275,14 @@ void HardTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
 // ---------------------------------------------------------------------------
 AudioProcessorEditor* HardTuneProcessor::createEditor()
 {
-    return new HardTuneEditor (*this);
+    try
+    {
+        return new HardTuneEditor (*this);
+    }
+    catch (...)
+    {
+        return nullptr;   // l'hote affichera une fenetre vide, pas un crash
+    }
 }
 
 // ---------------------------------------------------------------------------

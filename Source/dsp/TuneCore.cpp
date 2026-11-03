@@ -224,15 +224,47 @@ double TuneCore::formantRatio() const
 // ============================================================================
 void TuneCore::process (const float* const* in, float* const* out, int numSamples, int channels)
 {
-    if (numSamples <= 0 || stretcher == nullptr)
+    if (numSamples <= 0 || stretcher == nullptr || in == nullptr || out == nullptr)
         return;
 
-    channels = std::max (1, std::min (2, channels));
+    if (in[0] == nullptr || out[0] == nullptr)
+        return;
+
+    // Combien de canaux le moteur peut-il vraiment traiter ?
+    // dryDelay et le stretcher sont dimensionnes par prepare(). Si l'hote
+    // envoie plus de canaux que prevu (instance mono preparte puis relancee en
+    // stereo, changement de bus, wrappers de DAW...), ecrire sans borne
+    // debordait du tas et faisait tomber le DAW. On borne, on traite, puis on
+    // duplique le dernier canal traite sur les canaux restants.
+    const int prepared     = std::max (1, numChannels);
+    const int hostChannels = std::max (1, std::min (2, channels));
+    const int used         = std::min (hostChannels, prepared);
+
+    // Un bloc plus grand que ce que prepare() a annonce deborderait tmpWet :
+    // on le decoupe en tranches de maxBlock (l'hote a le droit d'envoyer
+    // n'importe quelle taille de bloc).
+    int done = 0;
+    while (done < numSamples)
+    {
+        const int n = std::min (maxBlock, numSamples - done);
+        processChunk (in, out, done, n, used);
+        done += n;
+    }
+
+    for (int c = used; c < hostChannels; ++c)
+        std::memcpy (out[c], out[used - 1], sizeof (float) * (size_t) numSamples);
+}
+
+void TuneCore::processChunk (const float* const* in, float* const* out, int offset,
+                             int numSamples, int channels)
+{
+    if (numSamples <= 0)
+        return;
 
     // ---- 1. chemin sec : on retarde l'entrée de la latence du stretcher -----
     for (int c = 0; c < channels; ++c)
     {
-        const float* src = in[c];
+        const float* src = in[c] + offset;
         float* dst = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
         for (int i = 0; i < numSamples; ++i)
             dst[(int) ((writePos + i) & dryMask)] = src[i];
@@ -240,7 +272,7 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
 
     // ---- 2. détection de hauteur (canal 1) ---------------------------------
     estimates.clear();
-    detector.process (in[0], numSamples, estimates);
+    detector.process (in[0] + offset, numSamples, estimates);
 
     for (const auto& e : estimates)
         pushFrame (e.pos, e.hz, e.confidence);
@@ -252,10 +284,17 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
     stretcher->setFormantScale (formantRatio());
 
     // ---- 4. envoi au stretcher ---------------------------------------------
-    const float* inPtrs[2] = { in[0], channels > 1 ? in[1] : in[0] };
+    const float* inPtrs[2] = { in[0] + offset,
+                               channels > 1 ? in[1] + offset : in[0] + offset };
     stretcher->process (inPtrs, (size_t) numSamples, false);
 
     // ---- 5. récupération ---------------------------------------------------
+    // Le stretcher a ete cree avec `numChannels` canaux : il faut lui fournir
+    // exactement ce nombre de pointeurs, sinon `retrieve` ecrit a travers un
+    // pointeur non initialise. On traite les canaux du stretcher, en repetant
+    // le dernier canal reel si l'hote en envoie moins.
+    const int stretcherCh = std::max (1, std::min (2, numChannels));
+
     int produced = 0;
     while (produced < numSamples)
     {
@@ -265,8 +304,8 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
 
         const int take = std::min (avail, numSamples - produced);
 
-        float* chans[2];
-        for (int c = 0; c < channels; ++c)
+        float* chans[2] = { nullptr, nullptr };
+        for (int c = 0; c < stretcherCh; ++c)
             chans[c] = tmpWet.data() + (size_t) c * (size_t) maxBlock + (size_t) produced;
 
         stretcher->retrieve (chans, (size_t) take);
@@ -274,7 +313,7 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
     }
 
     // amorçage : les premiers `latency` samples n'existent pas encore
-    for (int c = 0; c < channels; ++c)
+    for (int c = 0; c < stretcherCh; ++c)
         for (int i = produced; i < numSamples; ++i)
             tmpWet[(size_t) c * (size_t) maxBlock + (size_t) i] = 0.0f;
 
@@ -291,7 +330,7 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
         {
             const double d = (double) dry[(int) ((writePos + i - latency) & dryMask)];
             const double w = (double) wet[i];
-            out[c][i] = (float) ((d + (w - d) * m) * g);
+            out[c][offset + i] = (float) ((d + (w - d) * m) * g);
         }
     }
 
@@ -303,14 +342,14 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
 
         for (int c = 0; c < channels; ++c)
         {
-            const float* src = in[c];
+            const float* src = in[c] + offset;
             for (int i = 0; i < numSamples; ++i)
             {
                 const double x = (double) src[i];
                 inPk = std::max (inPk, std::abs (x));
                 inSq += x * x;
 
-                const double y = (double) out[c][i];
+                const double y = (double) out[c][offset + i];
                 outPk = std::max (outPk, std::abs (y));
                 outSq += y * y;
             }
