@@ -3,6 +3,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
+#include <vector>
+#include <atomic>
 
 #include "dsp/TuneCore.h"
 
@@ -46,7 +48,11 @@ public:
     static constexpr const char* kRetune   = "retune";
     static constexpr const char* kAmount   = "amount";
     static constexpr const char* kFormant  = "formant";
-    static constexpr const char* kMix      = "mix";
+    static constexpr const char* kHumanize = "humanize";
+    static constexpr const char* kVibrato  = "vibrato";
+    static constexpr const char* kVibRate  = "vibratoRate";
+    static constexpr const char* kDarkMode = "darkMode";
+    static constexpr const char* kCorrection = "correctionOn";
     static constexpr const char* kOutput   = "output";
     static constexpr const char* kTranspose= "transpose";
     static constexpr const char* kBypass   = "bypass";
@@ -54,12 +60,26 @@ public:
     static constexpr const char* kNotePrefix = "note";   // note0 .. note11
 
     // ---- Informations pour l'interface (thread-safe) -----------------------
-    float getDetectedHz()  const noexcept { return coreL.getDetectedHz(); }
-    float getDetectedMidi()const noexcept { return coreL.getDetectedMidi(); }
-    int   getTargetNote()  const noexcept { return coreL.getTargetNote(); }
-    float getCentsError()  const noexcept { return coreL.getCentsError(); }
-    bool  isVoiced()       const noexcept { return coreL.isVoiced(); }
+    float getDetectedHz()  const noexcept { return core.getDetectedHz(); }
+    float getDetectedMidi()const noexcept { return core.getDetectedMidi(); }
+    int   getTargetNote()  const noexcept { return core.getTargetNote(); }
+    float getCentsError()  const noexcept { return core.getCentsError(); }
+    bool  isVoiced()       const noexcept { return core.isVoiced(); }
+
+    // ---- vu-mètres (dB, thread-safe) --------------------------------------
+    float getInputPeakDb()  const noexcept { return core.getInputPeakDb(); }
+    float getInputRmsDb()   const noexcept { return core.getInputRmsDb(); }
+    float getOutputPeakDb() const noexcept { return core.getOutputPeakDb(); }
+    float getOutputRmsDb()  const noexcept { return core.getOutputRmsDb(); }
     int   getLatencyMs()   const noexcept;
+
+    // ---- oscilloscope pour l'interface -------------------------------------
+    static constexpr int kScopeSize = 2048;
+    /** Copie le tampon circulaire de l'oscilloscope dans `dest` (kScopeSize valeurs). */
+    void copyScope (float* dest) const noexcept;
+    /** Historique de la correction en cents (une valeur par bloc). */
+    static constexpr int kCentsCount = 256;
+    void copyCents (float* dest) const noexcept;
 
     /** Applique une valeur "métier" à un paramètre (utilisé par les presets). */
     void setParamValue (const juce::String& id, float value);
@@ -67,7 +87,12 @@ public:
 private:
     void syncEngineFromParameters();
 
-    tune::TuneCore coreL, coreR;
+    tune::TuneCore core;
+
+    std::vector<float> scopeBuf { (size_t) kScopeSize, 0.0f };
+    std::atomic<int>   scopeWrite { 0 };
+    std::vector<float> centsBuf { (size_t) kCentsCount, 0.0f };
+    std::atomic<int>   centsWrite { 0 };
     double currentSampleRate = 44100.0;
     int    currentBlockSize  = 512;
 

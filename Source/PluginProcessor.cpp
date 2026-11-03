@@ -39,8 +39,16 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
         NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f));
 
     layout.add (std::make_unique<AudioParameterFloat> (
-        kMix, "Mix",
-        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 100.0f));
+        kHumanize, "Humanize",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 32.0f));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        kVibrato, "Vibrato",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 20.0f));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        kVibRate, "Vibrato Rate",
+        NormalisableRange<float> (0.1f, 12.0f, 0.1f), 6.0f));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kOutput, "Output",
@@ -50,6 +58,8 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
         kTranspose, "Transpose", -6, 6, 0));
 
     layout.add (std::make_unique<AudioParameterBool> (kBypass, "Bypass", false));
+    layout.add (std::make_unique<AudioParameterBool> (kDarkMode, "Dark mode", false));
+    layout.add (std::make_unique<AudioParameterBool> (kCorrection, "Pitch correction", true));
     layout.add (std::make_unique<AudioParameterBool> (kCustomOn, "Custom scale", false));
 
     for (int i = 0; i < 12; ++i)
@@ -75,11 +85,9 @@ void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
 
-    coreL.prepare (sampleRate, samplesPerBlock);
-    coreR.prepare (sampleRate, samplesPerBlock);
-    coreR.setExternalPitchMode (true);
-
-    setLatencySamples (coreL.latencySamples());
+    const int channels = juce::jmax (1, getTotalNumInputChannels());
+    core.prepare (sampleRate, samplesPerBlock, channels);
+    setLatencySamples (core.latencySamples());
 
     syncEngineFromParameters();
 }
@@ -97,7 +105,7 @@ bool HardTuneProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 
 int HardTuneProcessor::getLatencyMs() const noexcept
 {
-    return (int) std::lround (1000.0 * (double) coreL.latencySamples() / currentSampleRate);
+    return (int) std::lround (1000.0 * (double) core.latencySamples() / currentSampleRate);
 }
 
 void HardTuneProcessor::setParamValue (const juce::String& id, float value)
@@ -116,21 +124,24 @@ void HardTuneProcessor::syncEngineFromParameters()
     const int scaleIndex = apvts.getRawParameterValue (kScale)->load();
 
     tune::TuneCore::Params p;
-    p.amount       = apvts.getRawParameterValue (kAmount)->load()  * 0.01f;
+    const bool corrOn = apvts.getRawParameterValue (kCorrection)->load() > 0.5f;
+    p.amount       = corrOn ? apvts.getRawParameterValue (kAmount)->load() * 0.01f : 0.0f;
     p.retuneMs     = apvts.getRawParameterValue (kRetune)->load();
     p.formant      = apvts.getRawParameterValue (kFormant)->load() * 0.01f;
-    p.mix          = apvts.getRawParameterValue (kMix)->load()     * 0.01f;
+    p.humanize     = apvts.getRawParameterValue (kHumanize)->load() * 0.01f;
+    p.vibrato      = apvts.getRawParameterValue (kVibrato)->load()  * 0.01f;
+    p.vibratoHz    = apvts.getRawParameterValue (kVibRate)->load();
+    p.mix          = 1.0f;                       // plus de MIX : il doublait la voix
     p.outputGainDb = apvts.getRawParameterValue (kOutput)->load();
     p.transpose    = (int) apvts.getRawParameterValue (kTranspose)->load();
     p.bypass       = apvts.getRawParameterValue (kBypass)->load() > 0.5f;
 
     const bool customOn = apvts.getRawParameterValue (kCustomOn)->load() > 0.5f;
 
-    for (auto* core : { &coreL, &coreR })
     {
-        core->setParams (p);
+        core.setParams (p);
 
-        auto& mapper = core->notes();
+        auto& mapper = core.notes();
         mapper.setKey (keyIndex);
 
         if (customOn || scaleIndex >= (int) tune::NoteMapper::NumScales)
@@ -163,15 +174,45 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     if (numSamples <= 0)
         return;
 
-    // Canal gauche (ou canal unique) : il fait la détection.
-    coreL.process (buffer.getReadPointer (0), buffer.getWritePointer (0), numSamples);
+    // Un seul moteur pour tous les canaux : gauche et droite sont traitées
+    // ensemble, donc un signal mono reste parfaitement mono.
+    const float* inPtrs[2]  = { buffer.getReadPointer (0),
+                                numChannels > 1 ? buffer.getReadPointer (1)
+                                                : buffer.getReadPointer (0) };
+    float* outPtrs[2]       = { buffer.getWritePointer (0),
+                                numChannels > 1 ? buffer.getWritePointer (1)
+                                                : buffer.getWritePointer (0) };
 
-    if (numChannels > 1)
+    core.process (inPtrs, outPtrs, numSamples, numChannels);
+
+    // ---- oscilloscope : on ne garde qu'un point sur N pour ne pas saturer ----
     {
-        // Canal droit : même correction, détection fournie par le canal gauche.
-        coreR.setExternalPitch ((double) coreL.getDetectedHz(), coreL.isVoiced());
-        coreR.process (buffer.getReadPointer (1), buffer.getWritePointer (1), numSamples);
+        const int step = juce::jmax (1, numSamples / 64);
+        int w = scopeWrite.load (std::memory_order_relaxed);
+        for (int i = 0; i < numSamples; i += step)
+        {
+            scopeBuf[(size_t) (w++ & (kScopeSize - 1))] = outPtrs[0][i];
+        }
+        scopeWrite.store (w, std::memory_order_relaxed);
+
+        const int cw = centsWrite.load (std::memory_order_relaxed);
+        centsBuf[(size_t) (cw & (kCentsCount - 1))] = core.getCentsError();
+        centsWrite.store (cw + 1, std::memory_order_relaxed);
     }
+}
+
+void HardTuneProcessor::copyScope (float* dest) const noexcept
+{
+    const int w = scopeWrite.load (std::memory_order_relaxed);
+    for (int i = 0; i < kScopeSize; ++i)
+        dest[i] = scopeBuf[(size_t) ((w + i) & (kScopeSize - 1))];
+}
+
+void HardTuneProcessor::copyCents (float* dest) const noexcept
+{
+    const int w = centsWrite.load (std::memory_order_relaxed);
+    for (int i = 0; i < kCentsCount; ++i)
+        dest[i] = centsBuf[(size_t) ((w + i) & (kCentsCount - 1))];
 }
 
 // ---------------------------------------------------------------------------

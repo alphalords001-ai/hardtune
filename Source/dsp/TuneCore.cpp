@@ -1,48 +1,95 @@
 //  TuneCore.cpp
 #include "TuneCore.h"
 
+#include <rubberband/RubberBandStretcher.h>
+
+#include <algorithm>
+#include <cmath>
 #include <cstring>
-#include <cstdlib>
 
 namespace tune
 {
 
-// ============================================================================
-//  Constantes de conception
-// ============================================================================
 namespace
 {
-    constexpr double kRatioMin = 0.75;   // correction/transposition max vers le bas
-    constexpr double kRatioMax = 1.50;   // correction/transposition max vers le haut
-
-    constexpr int    kHop = 128;         // pas d'analyse (samples)
+    constexpr int    kHop = 128;                 // pas d'analyse
     constexpr double kVoicedThreshold = 0.30;
 
-    // Facteur de latence = 2.8 périodes de la note la plus grave analysable.
-    // Couvre la fenêtre de grain (2*max(T,H)) et la marge de génération.
-    constexpr double kLatencyFactor = 2.5;
+    constexpr double kFormantRangeCents = 500.0; // FORMANT ±100 % -> ±500 cents
 
-    constexpr double kFormantRangeCents = 400.0;  // formant ±1 -> ±400 cents
+    // Plage de transposition confiée à Rubber Band
+    constexpr double kRatioMin = 0.5;
+    constexpr double kRatioMax = 2.0;
+
+    constexpr int kOptions =
+          (int) RubberBand::RubberBandStretcher::OptionProcessRealTime
+        | (int) RubberBand::RubberBandStretcher::OptionEngineFiner      // moteur R3
+        | (int) RubberBand::RubberBandStretcher::OptionWindowShort      // latence minimale
+        | (int) RubberBand::RubberBandStretcher::OptionPitchHighQuality
+        | (int) RubberBand::RubberBandStretcher::OptionFormantPreserved
+        | (int) RubberBand::RubberBandStretcher::OptionSmoothingOn
+        // Canaux traites ENSEMBLE : sans cette option, Rubber Band elargit
+        // artificiellement l'image stereo et casse la compatibilite mono
+        // (c'est exactement le defaut signale : « le mono devient stereo »).
+        | (int) RubberBand::RubberBandStretcher::OptionChannelsTogether;
 }
 
 // ============================================================================
-//  Cycle de vie
-// ============================================================================
-void TuneCore::prepare (double sampleRate, int /*maximumBlockSize*/)
+double TuneCore::linToDb (double x) noexcept
 {
-    sr = sampleRate;
+    return 20.0 * std::log10 (std::max (1.0e-5, std::abs (x)));
+}
 
-    Tmax = sr / 80.0;    // note la plus grave gérée : 80 Hz
-    Tmin = sr / 1200.0;  // note la plus aiguë : 1200 Hz
+// derive aléatoire lente, bornée à -1..+1 (marche filtrée)
+double TuneCore::humanizeCents()
+{
+    // Une nouvelle cible toutes les ~200 ms : la voix derive lentement au lieu
+    // de trembler. C'est exactement le comportement d'un chanteur humain.
+    if (--humanizeTicks <= 0)
+    {
+        humanizeTicks = std::max (1, (int) std::lround (0.200 * sr / (double) kHop));
+        rngState = rngState * 1664525u + 1013904223u;
+        humanizeTarget = ((double) (rngState >> 8) / 16777216.0) * 2.0 - 1.0;
+    }
 
-    latency = (int) std::lround (kLatencyFactor * Tmax);
+    humanizeWalk += (humanizeTarget - humanizeWalk) * 0.05;
+    return humanizeWalk;
+}
 
-    ringIn.assign   ((size_t) kRingSize, 0.0f);
-    ringWet.assign  ((size_t) kRingSize, 0.0f);
-    ringWsum.assign ((size_t) kRingSize, 0.0f);
+// ============================================================================
+TuneCore::TuneCore() = default;
+TuneCore::~TuneCore() = default;
+
+void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
+{
+    sr        = sampleRate;
+    maxBlock  = std::max (32, maximumBlockSize);
+    numChannels = std::max (1, std::min (2, channels));
+
+    stretcher = std::make_unique<RubberBand::RubberBandStretcher> (
+        (size_t) std::lround (sr),
+        (size_t) numChannels,
+        kOptions,
+        1.0,        // time ratio (aucun changement de durée)
+        1.0);       // pitch scale
+
+    stretcher->setMaxProcessSize ((size_t) maxBlock);
+    stretcher->setTimeRatio (1.0);
+    stretcher->setPitchScale (1.0);
+    stretcher->setFormantScale (1.0);
+
+    latency = (int) stretcher->getLatency();
 
     detector.setRange (80.0, 1200.0);
     detector.prepare (sr, 1024, kHop);
+
+    // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
+    int size = 1;
+    while (size < latency + maxBlock + 64) size <<= 1;
+    dryMask = size - 1;
+    dryDelay.assign ((size_t) size * (size_t) numChannels, 0.0f);
+
+    tmpWet.assign ((size_t) maxBlock * 2 + 2, 0.0f);
 
     frames.clear();
     frames.reserve (512);
@@ -53,45 +100,44 @@ void TuneCore::prepare (double sampleRate, int /*maximumBlockSize*/)
 
 void TuneCore::reset()
 {
-    std::fill (ringIn.begin(),   ringIn.end(),   0.0f);
-    std::fill (ringWet.begin(),  ringWet.end(),  0.0f);
-    std::fill (ringWsum.begin(), ringWsum.end(), 0.0f);
+    if (stretcher != nullptr)
+        stretcher->reset();
+
+    std::fill (dryDelay.begin(), dryDelay.end(), 0.0f);
+    writePos = 0;
+    totalIn  = 0;
 
     detector.reset();
     frames.clear();
     estimates.clear();
 
-    nIn = 0;
-    nOut = 0;
-
     stickyValid   = false;
     stickyNote    = 60;
     smoothedRatio = 1.0;
+    lastGoodPeriod = 0.0;
 
-    grainCenter = 0.0;
-    lastMark = 0.0;
-    hasMark = false;
-    refinePeriod = 0.0;
-    prevVoiced = false;
-    emitLimit   = 0.0;
-    lastGoodPeriod   = Tmax;
-    lastVoicedWeight = 0.0;
+    humanizeWalk = 0.0;
+    humanizeTarget = 0.0;
+    humanizeTicks = 0;
+    vibratoPhase = 0.0;
+    rngState = 0x12345678u;
+
+    inPeakLin = inRmsLin = outPeakLin = outRmsLin = 0.0;
+    uiInPeak.store (-100.0f);
+    uiInRms.store (-100.0f);
+    uiOutPeak.store (-100.0f);
+    uiOutRms.store (-100.0f);
 
     uiHz.store (0.0f);
     uiMidi.store (0.0f);
     uiTarget.store (-1);
     uiCents.store (0.0f);
     uiVoiced.store (false);
-}
-
-void TuneCore::setExternalPitch (double hz, bool voiced) noexcept
-{
-    extHz     = hz;
-    extVoiced = voiced;
+    uiRatio.store (1.0f);
 }
 
 // ============================================================================
-//  Quantification : note cible et ratio de correction
+//  Quantification
 // ============================================================================
 void TuneCore::pushFrame (long long pos, double hz, double conf)
 {
@@ -102,9 +148,10 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
 
     if (! f.voiced)
     {
-        // Silence / consonne : on relâche la correction vers 1 (transparent)
+        // Silence / consonne : on relâche la correction (ratio -> 1, transparent)
         smoothedRatio += (1.0 - smoothedRatio) * 0.25;
-        f.ratio = smoothedRatio;
+        f.ratio  = smoothedRatio;
+        f.target = -1;
     }
     else
     {
@@ -118,8 +165,6 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
         }
         else if (cand != stickyNote)
         {
-            // Hystérésis : on ne change de note cible que si c'est clairement mieux,
-            // sauf si l'écart devient énorme (nouvelle note franche).
             const double dCand   = std::abs (midiF - (double) cand);
             const double dSticky = std::abs (midiF - (double) stickyNote);
 
@@ -128,306 +173,190 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
         }
 
         const double targetMidi = (double) (stickyNote + params.transpose);
-        double cents = (targetMidi - midiF) * 100.0;
-        cents *= (double) params.amount;
+        double cents = (targetMidi - midiF) * 100.0 * (double) params.amount;
+
+        // HUMANIZE : petite dérive aléatoire lente (±15 cents max)
+        if (params.humanize > 0.0001f)
+            cents += humanizeCents() * (double) params.humanize * 15.0;
+
+        // VIBRATO : oscillation ajoutée (±50 cents max)
+        if (params.vibrato > 0.0001f)
+        {
+            const double hz = (double) std::max (0.1f, params.vibratoHz);
+            vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) kHop / sr;
+            if (vibratoPhase > 6.283185307179586)
+                vibratoPhase -= 6.283185307179586;
+            cents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
+        }
 
         const double target = std::min (kRatioMax, std::max (kRatioMin, centsToRatio (cents)));
 
-        // Lissage : "retune speed"
         double alpha = 0.0;
         if (params.retuneMs > 0.5f)
         {
             const double tau = (double) params.retuneMs * 0.001;
-            alpha = std::exp (-(double) kHop / (tau * sr));
-            alpha = std::min (0.9999, std::max (0.0, alpha));
+            alpha = std::min (0.9999, std::max (0.0, std::exp (-(double) kHop / (tau * sr))));
         }
 
         smoothedRatio = alpha * smoothedRatio + (1.0 - alpha) * target;
-        f.ratio = smoothedRatio;
+        f.ratio  = smoothedRatio;
+        f.target = (int) std::lround (targetMidi);
     }
 
     frames.push_back (f);
-
     if (frames.size() > 600)
         frames.erase (frames.begin(), frames.begin() + 200);
 }
 
-TuneCore::Frame TuneCore::frameAt (long long pos) const
+double TuneCore::currentRatio() const
 {
-    if (frames.empty())
-    {
-        Frame f;
-        f.pos = pos;
-        return f;
-    }
-
-    // dernière frame dont la position est <= pos
-    size_t lo = 0, hi = frames.size();
-    while (lo < hi)
-    {
-        const size_t mid = (lo + hi) / 2;
-        if (frames[mid].pos <= pos) lo = mid + 1;
-        else                        hi = mid;
-    }
-
-    if (lo == 0) return frames.front();
-    return frames[lo - 1];
+    return std::min (kRatioMax, std::max (kRatioMin, smoothedRatio));
 }
 
-double TuneCore::periodAt (long long pos) const
+double TuneCore::formantRatio() const
 {
-    Frame f = frameAt (pos);
-    if (f.voiced && f.hz > 0.0)
-    {
-        const double T = sr / f.hz;
-        return std::min (Tmax, std::max (Tmin, T));
-    }
-    return std::min (Tmax, std::max (Tmin, lastGoodPeriod));
+    return std::min (2.0, std::max (0.5,
+             centsToRatio ((double) params.formant * kFormantRangeCents)));
 }
 
 // ============================================================================
-//  Synthèse PSOLA
+//  Traitement
 // ============================================================================
-double TuneCore::readInLinear (double pos) const
+void TuneCore::process (const float* const* in, float* const* out, int numSamples, int channels)
 {
-    if (pos <= 0.0)
-        return 0.0;
-
-    long long p0 = (long long) std::floor (pos);
-    double frac  = pos - (double) p0;
-
-    const long long oldest = std::max<long long> (0, nIn - kRingSize + 2);
-    if (p0 < oldest) { p0 = oldest; frac = 0.0; }
-    if (p0 + 1 >= nIn)
-        return ringIn[(int) (p0 & kRingMask)];
-
-    const double a = ringIn[(int) (p0       & kRingMask)];
-    const double b = ringIn[(int) ((p0 + 1) & kRingMask)];
-    return a + (b - a) * frac;
-}
-
-void TuneCore::generateGrains()
-{
-    const double formantRatio = std::min (2.0,
-                                   std::max (0.5, centsToRatio ((double) params.formant * kFormantRangeCents)));
-
-    int guard = 0;
-
-    while (guard++ < 256)
-    {
-        const long long approx = (long long) grainCenter;
-
-        const double T = periodAt (approx);
-
-        Frame f = frameAt (approx);
-        if (f.voiced && f.hz > 0.0)
-            lastGoodPeriod = T;
-
-        double ratio = f.ratio;
-        if (! (ratio > 0.01)) ratio = 1.0;
-        ratio = std::min (kRatioMax, std::max (kRatioMin, ratio));
-
-        const double H = T / ratio;             // pas de synthèse
-        const double L = 2.0 * T;               // longueur du grain (2 périodes)
-
-        // Entrée nécessaire : recalage de la marque (± T/4 + 1 période)
-        // puis lecture du grain entier.
-        const double need = 1.30 * T + std::max (0.0, 0.5 * L * (std::max (1.0, formantRatio) - 1.0)) + 4.0;
-        if (grainCenter + need > (double) nIn)
-            break;
-
-        // --- marque de pitch -------------------------------------------------
-        // On avance de période en période (T) ; quand l'avance accumulée
-        // s'écarte de la position de lecture idéale, on duplique ou on saute
-        // une période : c'est ce mécanisme qui produit le changement de hauteur.
-        // Le recalage par corrélation n'a lieu qu'au début d'un passage voisé
-        // ou si la période change franchement (évite les sauts de phase).
-        const bool voicedOnset = (f.voiced && ! prevVoiced);
-        const bool needRefine  = (! hasMark) || voicedOnset
-                                 || (refinePeriod > 0.0
-                                     && std::abs (T - refinePeriod) > 0.05 * refinePeriod);
-
-        double mark;
-        if (needRefine)
-        {
-            mark = findBestMark (grainCenter, T);
-            refinePeriod = T;
-        }
-        else
-        {
-            double k = std::round ((grainCenter - lastMark) / T);
-            if (k < 0.0) k = 0.0;
-            mark = lastMark + k * T;
-        }
-
-        // On garantit |mark - centre| <= T/2 : le décalage temporel du chemin
-        // "wet" reste ainsi borné à une demi-période.
-        while (mark - grainCenter >  0.5 * T) mark -= T;
-        while (mark - grainCenter < -0.5 * T) mark += T;
-
-        lastMark  = mark;      // double : aucune erreur d'arrondi ne s'accumule
-        hasMark   = f.voiced;
-        prevVoiced = f.voiced;
-
-        // --- écriture du grain ---------------------------------------------
-        const long long c    = (long long) std::llround (grainCenter);
-        const int       half = (int) std::llround (L * 0.5);
-
-        for (int i = -half; i < half; ++i)
-        {
-            const double w = hann (((double) i + (double) half + 0.5) / ((double) half * 2.0));
-            if (w <= 1e-4) continue;
-
-            const double src = mark + (double) i * formantRatio;
-            const double s   = readInLinear (src);
-
-            const long long p = c + i;
-            const int idx = (int) (p & kRingMask);
-
-            ringWet[idx]  += (float) (s * w);
-            ringWsum[idx] += (float) w;
-        }
-
-        grainCenter += H;
-
-        const double limit = grainCenter - 0.5 * L - 1.0;
-        if (limit > emitLimit)
-            emitLimit = limit;
-    }
-}
-
-// Recherche de la meilleure "marque de pitch" (début de période) autour de
-// `center`, par corrélation normalisée avec la période précédente.
-// C'est ce qui évite de couper la forme d'onde au milieu d'une impulsion
-// glottique — la cause n°1 du son "granuleux" des PSOLA mal réglés.
-double TuneCore::findBestMark (double center, double period) const
-{
-    const int Ti = (int) std::min (512.0, std::floor (period));
-    if (Ti < 16)
-        return center;
-
-    const double lo = center - 0.5 * period;
-    const double hi = center + 0.5 * period;
-
-    double best = center, bestScore = -1.0e30;
-
-    for (double q = lo; q <= hi; q += 1.0)
-    {
-        double score = 0.0;
-        for (int j = 0; j < Ti; ++j)
-            score += readInLinear (q + (double) j) * readInLinear (q + (double) j - period);
-
-        if (score > bestScore)
-        {
-            bestScore = score;
-            best = q;
-        }
-    }
-    return best;
-}
-
-// ============================================================================
-//  Sortie
-// ============================================================================
-void TuneCore::emitSample (long long n, float& outSample)
-{
-    const int idx = (int) (n & kRingMask);
-
-    const float dry  = ringIn[idx];
-    const float wsum = ringWsum[idx];
-
-    float wet = dry;
-    if (wsum > 0.15f)
-        wet = ringWet[idx] / wsum;
-
-    // poids "voisé" lissé : sur les consonnes et le souffle, on repasse en dry
-    const Frame f = frameAt (n);
-    const double targetW = f.voiced ? 1.0 : 0.0;
-    const double coef = 1.0 / std::max (1.0, 0.004 * sr);
-    lastVoicedWeight += (targetW - lastVoicedWeight) * coef;
-
-    double m = (double) params.mix * lastVoicedWeight;
-    if (params.bypass) m = 0.0;
-
-    double y = (double) dry * (1.0 - m) + (double) wet * m;
-    y *= dbToGain ((double) params.outputGainDb);
-
-    outSample = (float) y;
-
-    // libère la place dans l'anneau pour les samples futurs
-    ringWet[idx]  = 0.0f;
-    ringWsum[idx] = 0.0f;
-}
-
-void TuneCore::process (const float* in, float* out, int numSamples)
-{
-    if (numSamples <= 0)
+    if (numSamples <= 0 || stretcher == nullptr)
         return;
 
-    // ---- 1. écriture dans l'anneau ------------------------------------------
-    for (int i = 0; i < numSamples; ++i)
-        ringIn[(int) ((nIn + i) & kRingMask)] = in[i];
+    channels = std::max (1, std::min (2, channels));
 
-    // ---- 2. détection -------------------------------------------------------
-    if (! externalPitch)
+    // ---- 1. chemin sec : on retarde l'entrée de la latence du stretcher -----
+    for (int c = 0; c < channels; ++c)
     {
-        estimates.clear();
-        detector.process (in, numSamples, estimates);
-
-        for (const auto& e : estimates)
-            pushFrame (e.pos, e.hz, e.confidence);
-    }
-    else
-    {
-        pushFrame (nIn + numSamples - 1, extVoiced ? extHz : 0.0, extVoiced ? 1.0 : 0.0);
+        const float* src = in[c];
+        float* dst = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
+        for (int i = 0; i < numSamples; ++i)
+            dst[(int) ((writePos + i) & dryMask)] = src[i];
     }
 
-    nIn += numSamples;
+    // ---- 2. détection de hauteur (canal 1) ---------------------------------
+    estimates.clear();
+    detector.process (in[0], numSamples, estimates);
 
-    // ---- 3. synthèse --------------------------------------------------------
-    if (! params.bypass || true)   // on synthétise toujours : la latence reste constante
-        generateGrains();
+    for (const auto& e : estimates)
+        pushFrame (e.pos, e.hz, e.confidence);
 
-    // ---- 4. sortie ----------------------------------------------------------
+    totalIn += numSamples;
+
+    // ---- 3. mise à jour du moteur ------------------------------------------
+    stretcher->setPitchScale (currentRatio());
+    stretcher->setFormantScale (formantRatio());
+
+    // ---- 4. envoi au stretcher ---------------------------------------------
+    const float* inPtrs[2] = { in[0], channels > 1 ? in[1] : in[0] };
+    stretcher->process (inPtrs, (size_t) numSamples, false);
+
+    // ---- 5. récupération ---------------------------------------------------
     int produced = 0;
     while (produced < numSamples)
     {
-        if (nOut + latency <= nIn && (double) nOut < emitLimit)
+        const int avail = (int) stretcher->available();
+        if (avail <= 0)
+            break;
+
+        const int take = std::min (avail, numSamples - produced);
+
+        float* chans[2];
+        for (int c = 0; c < channels; ++c)
+            chans[c] = tmpWet.data() + (size_t) c * (size_t) maxBlock + (size_t) produced;
+
+        stretcher->retrieve (chans, (size_t) take);
+        produced += take;
+    }
+
+    // amorçage : les premiers `latency` samples n'existent pas encore
+    for (int c = 0; c < channels; ++c)
+        for (int i = produced; i < numSamples; ++i)
+            tmpWet[(size_t) c * (size_t) maxBlock + (size_t) i] = 0.0f;
+
+    // ---- 6. mélange sec / traité + gain ------------------------------------
+    const double m = params.bypass ? 0.0 : (double) params.mix;
+    const double g = dbToGain ((double) params.outputGainDb);
+
+    for (int c = 0; c < channels; ++c)
+    {
+        const float* dry = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
+        const float* wet = tmpWet.data()  + (size_t) c * (size_t) maxBlock;
+
+        for (int i = 0; i < numSamples; ++i)
         {
-            float s = 0.0f;
-            emitSample (nOut, s);
-            out[produced++] = s;
-            ++nOut;
+            const double d = (double) dry[(int) ((writePos + i - latency) & dryMask)];
+            const double w = (double) wet[i];
+            out[c][i] = (float) ((d + (w - d) * m) * g);
+        }
+    }
+
+    writePos += numSamples;
+
+    // ---- 6 bis. vu-mètres entrée / sortie ----------------------------------
+    {
+        double inPk = 0.0, inSq = 0.0, outPk = 0.0, outSq = 0.0;
+
+        for (int c = 0; c < channels; ++c)
+        {
+            const float* src = in[c];
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double x = (double) src[i];
+                inPk = std::max (inPk, std::abs (x));
+                inSq += x * x;
+
+                const double y = (double) out[c][i];
+                outPk = std::max (outPk, std::abs (y));
+                outSq += y * y;
+            }
+        }
+
+        const double n = (double) std::max (1, numSamples * channels);
+        const double inRmsNow  = std::sqrt (inSq  / n);
+        const double outRmsNow = std::sqrt (outSq / n);
+
+        // attaque immédiate, relâchement doux (~300 ms)
+        const double rel = std::exp (-(double) numSamples / (0.30 * sr));
+        inPeakLin  = std::max (inPk,      inPeakLin  * rel);
+        outPeakLin = std::max (outPk,     outPeakLin * rel);
+        inRmsLin   = std::max (inRmsNow,  inRmsLin   * rel);
+        outRmsLin  = std::max (outRmsNow, outRmsLin  * rel);
+
+        uiInPeak.store  ((float) linToDb (inPeakLin));
+        uiInRms.store   ((float) linToDb (inRmsLin));
+        uiOutPeak.store ((float) linToDb (outPeakLin));
+        uiOutRms.store  ((float) linToDb (outRmsLin));
+    }
+
+    // ---- 7. informations pour l'interface ----------------------------------
+    if (! frames.empty())
+    {
+        const Frame& f = frames.back();
+        if (f.voiced && f.hz > 0.0)
+        {
+            const double midiF = hzToMidi (f.hz);
+            uiHz.store ((float) f.hz);
+            uiMidi.store ((float) midiF);
+            uiVoiced.store (true);
+            uiTarget.store (f.target);
+            if (f.target >= 0)
+                uiCents.store ((float) ((midiF - (double) f.target) * 100.0));
+            else
+                uiCents.store (0.0f);
         }
         else
         {
-            // amorçage : les `latency` premiers samples de sortie sont du silence
-            out[produced++] = 0.0f;
+            uiHz.store (0.0f);
+            uiVoiced.store (false);
+            uiTarget.store (-1);
+            uiCents.store (0.0f);
         }
-    }
-
-    // ---- 5. informations pour l'interface -----------------------------------
-    const Frame f = frameAt (nOut);
-    if (f.voiced && f.hz > 0.0)
-    {
-        const double midiF = hzToMidi (f.hz);
-        uiHz.store ((float) f.hz);
-        uiMidi.store ((float) midiF);
-        uiVoiced.store (true);
-
-        if (stickyValid)
-        {
-            uiTarget.store (stickyNote + params.transpose);
-            const double targetMidi = (double) (stickyNote + params.transpose);
-            uiCents.store ((float) ((midiF - targetMidi) * 100.0));
-        }
-    }
-    else
-    {
-        uiHz.store (0.0f);
-        uiVoiced.store (false);
-        uiTarget.store (-1);
-        uiCents.store (0.0f);
+        uiRatio.store ((float) currentRatio());
     }
 }
 

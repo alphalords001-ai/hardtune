@@ -1,13 +1,11 @@
-//  PluginEditor.h — interface du plugin.
+//  PluginEditor.h — l'interface du plugin, fidèle à la maquette validée.
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <array>
-#include <memory>
 
 #include "PluginProcessor.h"
-#include "gui/HardTuneLookAndFeel.h"
-#include "gui/PitchDisplay.h"
+#include "gui/Theme.h"
+#include "gui/Widgets.h"
 
 class HardTuneEditor : public juce::AudioProcessorEditor,
                        private juce::Timer
@@ -20,48 +18,56 @@ public:
     void resized() override;
 
 private:
-    struct Knob
-    {
-        std::unique_ptr<juce::Slider> slider;
-        std::unique_ptr<juce::Label>  title;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attach;
-    };
-
     void timerCallback() override;
+    void applyTheme();
+    void drawCard (juce::Graphics&, juce::Rectangle<int>) const;
 
-    void setupKnob (Knob& k, const juce::String& paramId, const juce::String& text,
-                    const juce::String& suffix);
-    void buildKeyButtons();
-    void buildCustomToggles();
-    void applyPreset (int index);
-    void refreshKeyButtonsFromParameter();
+    juce::Label& makeLabel (juce::Label&, const juce::String& text, float height,
+                            juce::Colour colour, bool bold = false);
+    juce::Label& makeCaption (juce::Label&, const juce::String& text, float height);
 
     HardTuneProcessor& proc;
-    HardTuneLookAndFeel lnf;
+    ht::Palette pal;
 
-    // --- en-tête ------------------------------------------------------------
-    juce::ComboBox  presetBox;
-    juce::TextButton tpainButton { "T-PAIN" };
-    juce::TextButton bypassButton { "BYPASS" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttach;
+    // ---- en-tête -----------------------------------------------------------
+    juce::Label  titleLabel, keyCaption, scaleCaption, lightCaption, darkCaption, bypassCaption;
+    juce::ComboBox keyBox, scaleBox;
+    ht::PillSwitch darkSwitch { "dark" }, bypassSwitch { "bypass" };
 
-    // --- tonalité / gamme ---------------------------------------------------
-    std::array<std::unique_ptr<juce::TextButton>, 12> keyButtons;
-    juce::ComboBox scaleBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scaleAttach;
+    // ---- clavier + oscilloscope --------------------------------------------
+    ht::KeyStrip keys;
+    ht::Scope    scope;
+    juce::Label  scopeCaption;
 
-    std::array<std::unique_ptr<juce::ToggleButton>, 12> customToggles;
-    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 12> customAttaches;
-    juce::ToggleButton customOnButton { "CUSTOM" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> customOnAttach;
+    // ---- colonne de droite --------------------------------------------------
+    juce::Label  retuneCaption, retuneValue;
+    ht::Knob     retuneKnob;                 // Ø92
+    juce::Label  humanizeCaption, humanizeValue, flexCaption, flexValue;
+    ht::Knob     humanizeKnob, flexKnob;     // Ø68
+    juce::Label  corrCaption, corrState, vibCaption, vibValue, rateCaption, rateValue;
+    ht::PillSwitch corrSwitch { "correction" };
+    ht::Knob     vibratoKnob, rateKnob;
+    ht::LevelMeter meterIn, meterOut;
 
-    // --- boutons rotatifs ---------------------------------------------------
-    Knob kRetune, kAmount, kFormant, kMix, kTranspose, kOutput;
+    // ---- carte du grand cadran ---------------------------------------------
+    ht::Gauge    gauge;
+    juce::Label  noteLabel, pitchCaption, targetCaption;
+    juce::Label  formantCaption, formantValue, transposeCaption, transposeValue;
+    ht::BarControl formantBar, transposeBar;
 
-    // --- écran ---------------------------------------------------------------
-    ht::PitchDisplay display;
+    // ---- pièces jointes aux paramètres -------------------------------------
+    using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
-    int lastKeyIndex = -1;
+    std::unique_ptr<SliderAtt> retuneAtt, humanizeAtt, flexAtt, vibratoAtt, rateAtt,
+                               formantAtt, transposeAtt;
+    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt, corrAtt;
+    std::unique_ptr<ComboAtt>  keyAtt, scaleAtt;
+
+    // rectangles des cartes (dessinées dans paint)
+    juce::Rectangle<int> rHeader, rKeys, rScope, rRetuneCard, rCorrCard, rMetersCard,
+                         rGaugeCard, rGaugeInner;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardTuneEditor)
 };

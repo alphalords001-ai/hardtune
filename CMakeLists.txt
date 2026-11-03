@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HardTune VERSION 0.1.0 LANGUAGES C CXX)
+project(HardTune VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +19,28 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 # ---------------------------------------------------------------------------
+#  Rubber Band Library (moteur de transposition, licence GPL v2+)
+#  Version "fichier unique" : aucun système de build à gérer, un seul .cpp.
+# ---------------------------------------------------------------------------
+FetchContent_Declare(rubberband
+    GIT_REPOSITORY https://github.com/breakfastquay/rubberband.git
+    GIT_TAG        v4.0.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  no-cmake-here)   # évite add_subdirectory (le projet utilise meson)
+FetchContent_MakeAvailable(rubberband)
+
+add_library(rubberband_single STATIC
+    ${rubberband_SOURCE_DIR}/single/RubberBandSingle.cpp)
+target_include_directories(rubberband_single PUBLIC ${rubberband_SOURCE_DIR})
+target_compile_features(rubberband_single PUBLIC cxx_std_17)
+set_target_properties(rubberband_single PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# MSVC : le fichier unique de Rubber Band est volumineux
+if (MSVC)
+    target_compile_options(rubberband_single PRIVATE /bigobj)
+endif()
+
+# ---------------------------------------------------------------------------
 #  Le plugin
 # ---------------------------------------------------------------------------
 juce_add_plugin(HardTune
@@ -27,6 +49,7 @@ juce_add_plugin(HardTune
     BUNDLE_ID                   "org.hardtune.plugin"
     PLUGIN_MANUFACTURER_CODE    Htun
     PLUGIN_CODE                 Ht01
+    VERSION                     0.5.0
     FORMATS                     VST3 Standalone
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -48,6 +71,8 @@ target_sources(HardTune PRIVATE
     Source/dsp/TuneMath.h
     Source/gui/HardTuneLookAndFeel.cpp
     Source/gui/HardTuneLookAndFeel.h
+    Source/gui/Theme.h
+    Source/gui/Widgets.h
     Source/gui/PitchDisplay.cpp
     Source/gui/PitchDisplay.h)
 
@@ -58,6 +83,7 @@ target_compile_definitions(HardTune PUBLIC
 
 target_link_libraries(HardTune
     PRIVATE
+        rubberband_single
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_gui_basics
@@ -76,6 +102,7 @@ add_executable(hardtune_dsp_tests
 
 target_include_directories(hardtune_dsp_tests PRIVATE Source/dsp)
 target_compile_features(hardtune_dsp_tests PRIVATE cxx_std_17)
+target_link_libraries(hardtune_dsp_tests PRIVATE rubberband_single)
 
 # ---------------------------------------------------------------------------
 #  Compilation Linux : compatibilité des vieilles distributions (glibc)
