@@ -109,6 +109,16 @@ private:
     int latency = 0;
 
     std::vector<float> tmpWet;        // sortie brute du stretcher (maxBlock * canaux)
+
+    //  FIFO de sortie du stretcher. On y vide TOUT ce que Rubber Band produit,
+    //  et on ne consomme qu'un bloc a la fois. Sans ce tampon, le "burst"
+    //  initial du stretcher n'etait jamais resorbe : il s'ajoutait pour toujours
+    //  a la latence reelle (mesure hors DAW : 2048 echantillons reels pour 1280
+    //  annonces, soit 16 ms de retard que le DAW ne compensait pas).
+    std::vector<float> wetFifo;
+    int fifoSize = 0;
+    int fifoRead = 0;
+    int fifoFill = 0;
     std::vector<float> dryDelay;      // retard du chemin sec (canaux * taille)
     int dryMask = 0;
     long long writePos = 0;

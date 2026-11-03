@@ -25,8 +25,11 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
         scales.add (tune::NoteMapper::scaleName ((tune::NoteMapper::Scale) i));
     scales.add ("Custom");
 
+    //  Gamme CHROMATIQUE par defaut : on vise la note la plus proche, comme tout
+    //  accordeur. Avec "Major / C" par defaut, un chanteur dans une autre tonalite
+    //  voyait sa voix poussee vers des notes fausses des l'ouverture du plugin.
     layout.add (std::make_unique<AudioParameterChoice> (
-        kScale, "Scale", scales, (int) tune::NoteMapper::Major));
+        kScale, "Scale", scales, (int) tune::NoteMapper::Chromatic));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kRetune, "Retune Speed",
@@ -40,13 +43,17 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
         kFormant, "Formant",
         NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f));
 
+    //  Desactives par defaut : appliques par-dessus une correction a 0 ms, ils
+    //  ajoutent une derive aleatoire (+-4.8 cents) et un vibrato synthetique
+    //  (+-10 cents a 6 Hz) qui font sonner la voix "robotique / instable" et
+    //  donnent l'impression que la correction ne tient pas la note.
     layout.add (std::make_unique<AudioParameterFloat> (
         kHumanize, "Humanize",
-        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 32.0f));
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kVibrato, "Vibrato",
-        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 20.0f));
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kVibRate, "Vibrato Rate",

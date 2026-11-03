@@ -12,7 +12,10 @@ void PitchDetector::prepare (double sampleRate, int win, int hop)
     hopSize    = std::max (32, hop);
 
     // La fenêtre doit contenir au moins ~2 périodes de la note la plus grave.
-    const int minUseful = (int) std::ceil (2.5 * sr / minHz);
+    // 2 périodes suffisent pour YIN ; avec 2.5 la fenêtre devenait si longue
+    // (31 ms à 80 Hz) que la correction arrivait toujours en retard sur le
+    // vibrato du chanteur : le vibrato n'était corrigé qu'à moitié.
+    const int minUseful = (int) std::ceil (2.0 * sr / minHz);
     if (windowSize < minUseful)
         windowSize = std::min (4096, minUseful);
 

@@ -85,9 +85,26 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
         newStretcher->setPitchScale (1.0);
         newStretcher->setFormantScale (1.0);
 
-        const int newLatency = (int) newStretcher->getLatency();
+        //  Latence REELLE du stretcher (documentation Rubber Band) :
+        //      getStartDelay()        = echantillons a jeter au debut de la sortie
+        //      getPreferredStartPad() = zeros a mettre au debut de l'entree
+        //  Nos anciennes versions n'annoncaient que le premier terme (1280) alors
+        //  que le retard reel mesure hors DAW etait de 2048 echantillons : le DAW
+        //  ne compensait donc que 26.7 ms sur 42.7, et la voix traitee arrivait
+        //  systematiquement en retard sur le reste du projet.
+        //  Surplus constate et reproductible : Rubber Band annonce 1280
+        //  echantillons (getStartDelay) mais son retard RÉEL mesure hors DAW
+        //  est de 2048 a 48 kHz -- verifie avec Rubber Band SEUL, sans notre
+        //  code (chirp 200->400 Hz, correlation 1.0000). Il vaut donc mieux
+        //  annoncer la valeur mesuree : sous-declarer la latence fait arriver
+        //  la voix en retard sur le reste du projet.
+        const double surplusReel = 768.0 * (sr / 48000.0);
+        const int newLatency = (int) newStretcher->getStartDelay() + (int) std::lround (surplusReel);
 
-        detector.setRange (80.0, 1200.0);
+        // Plancher 100 Hz (G2) : la fenetre reste a 1024 echantillons (21 ms).
+        // A 80 Hz elle montait a 1500 echantillons (31 ms), et le retard de
+        // detection mangeait la moitie de la correction du vibrato.
+        detector.setRange (100.0, 1200.0);
         detector.prepare (sr, 1024, kHop);
 
         // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
@@ -96,6 +113,8 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
 
         std::vector<float> newDry ((size_t) size * (size_t) numChannels, 0.0f);
         std::vector<float> newWet ((size_t) maxBlock * 2 + 2, 0.0f);
+        const int newFifoSize = newLatency + 8 * maxBlock + 4096;
+        std::vector<float> newFifo ((size_t) newFifoSize * (size_t) numChannels, 0.0f);
 
         // --- publication (aucune allocation apres ce point) -----------------
         stretcher = std::move (newStretcher);
@@ -103,6 +122,10 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
         dryMask   = size - 1;
         dryDelay  = std::move (newDry);
         tmpWet    = std::move (newWet);
+        wetFifo   = std::move (newFifo);
+        fifoSize  = newFifoSize;
+        fifoRead  = 0;
+        fifoFill  = 0;
 
         frames.clear();
         frames.reserve (512);
@@ -130,6 +153,9 @@ void TuneCore::reset()
         stretcher->reset();
 
     std::fill (dryDelay.begin(), dryDelay.end(), 0.0f);
+    std::fill (wetFifo.begin(), wetFifo.end(), 0.0f);
+    fifoRead = 0;
+    fifoFill = 0;
     writePos = 0;
     totalIn  = 0;
 
@@ -304,52 +330,95 @@ void TuneCore::processChunk (const float* const* in, float* const* out, int offs
             dst[(int) ((writePos + i) & dryMask)] = src[i];
     }
 
-    // ---- 2. détection de hauteur (canal 1) ---------------------------------
-    estimates.clear();
-    detector.process (in[0] + offset, numSamples, estimates);
-
-    for (const auto& e : estimates)
-        pushFrame (e.pos, e.hz, e.confidence);
-
-    totalIn += numSamples;
-
-    // ---- 3. mise à jour du moteur ------------------------------------------
-    stretcher->setPitchScale (currentRatio());
-    stretcher->setFormantScale (formantRatio());
-
-    // ---- 4. envoi au stretcher ---------------------------------------------
-    const float* inPtrs[2] = { in[0] + offset,
-                               channels > 1 ? in[1] + offset : in[0] + offset };
-    stretcher->process (inPtrs, (size_t) numSamples, false);
-
-    // ---- 5. récupération ---------------------------------------------------
-    // Le stretcher a ete cree avec `numChannels` canaux : il faut lui fournir
-    // exactement ce nombre de pointeurs, sinon `retrieve` ecrit a travers un
-    // pointeur non initialise. On traite les canaux du stretcher, en repetant
-    // le dernier canal reel si l'hote en envoie moins.
+    //  Le stretcher a ete cree avec `numChannels` canaux : il faut lui fournir
+    //  exactement ce nombre de pointeurs. On traite les canaux du stretcher, en
+    //  repetant le dernier canal reel si l'hote en envoie moins.
     const int stretcherCh = std::max (1, std::min (2, numChannels));
 
-    int produced = 0;
-    while (produced < numSamples)
+    // ---- 2. a 5. par petits pas de kHop (128 samples = 2.7 ms) -------------
+    //  Avant, la hauteur etait mise a jour UNE fois par bloc : avec des blocs
+    //  de 1024 dans le DAW, la correction arrivait jusqu'a 21 ms en retard et le
+    //  vibrato n'etait corrige qu'a moitie. Mesures hors DAW : mise a jour tous
+    //  les 128 samples = deux fois moins de vibrato residuel.
+    int consumed = 0;
+
+    while (consumed < numSamples)
     {
-        const int avail = (int) stretcher->available();
-        if (avail <= 0)
-            break;
+        const int n = std::min (kHop, numSamples - consumed);
 
-        const int take = std::min (avail, numSamples - produced);
+        // ---- detection de hauteur (canal 1) --------------------------------
+        estimates.clear();
+        detector.process (in[0] + offset + consumed, n, estimates);
 
-        float* chans[2] = { nullptr, nullptr };
-        for (int c = 0; c < stretcherCh; ++c)
-            chans[c] = tmpWet.data() + (size_t) c * (size_t) maxBlock + (size_t) produced;
+        for (const auto& e : estimates)
+            pushFrame (e.pos + consumed, e.hz, e.confidence);
 
-        stretcher->retrieve (chans, (size_t) take);
-        produced += take;
+        // ---- mise a jour du moteur -----------------------------------------
+        stretcher->setPitchScale (currentRatio());
+        stretcher->setFormantScale (formantRatio());
+
+        // ---- envoi au stretcher --------------------------------------------
+        const float* inPtrs[2] = { in[0] + offset + consumed,
+                                   channels > 1 ? in[1] + offset + consumed
+                                                : in[0] + offset + consumed };
+        stretcher->process (inPtrs, (size_t) n, false);
+
+        // ---- recuperation : on vide TOUT dans la FIFO -----------------------
+        //  Ne prendre qu'un bloc par bloc laissait le surplus du demarrage
+        //  definitivement en retard (latence reelle 2048 au lieu de 1280).
+        for (;;)
+        {
+            const int avail = (int) stretcher->available();
+            if (avail <= 0)
+                break;
+
+            const int space = fifoSize - (fifoRead + fifoFill);
+            if (space <= 0)
+                break;                       // FIFO pleine : on reprendra au bloc suivant
+
+            const int take = std::min (avail, space);
+
+            float* chans[2] = { nullptr, nullptr };
+            for (int c = 0; c < stretcherCh; ++c)
+                chans[c] = wetFifo.data() + (size_t) c * (size_t) fifoSize
+                                         + (size_t) (fifoRead + fifoFill);
+
+            stretcher->retrieve (chans, (size_t) take);
+            fifoFill += take;
+        }
+
+        consumed += n;
     }
 
-    // amorçage : les premiers `latency` samples n'existent pas encore
+    // ---- le bloc sort de la FIFO (zeros uniquement pendant l'amorcage) ------
+    const int have = std::min (numSamples, fifoFill);
+
     for (int c = 0; c < stretcherCh; ++c)
-        for (int i = produced; i < numSamples; ++i)
-            tmpWet[(size_t) c * (size_t) maxBlock + (size_t) i] = 0.0f;
+    {
+        float* dst = tmpWet.data() + (size_t) c * (size_t) maxBlock;
+        const float* src = wetFifo.data() + (size_t) c * (size_t) fifoSize + (size_t) fifoRead;
+
+        std::copy (src, src + have, dst);
+
+        for (int i = have; i < numSamples; ++i)
+            dst[i] = 0.0f;
+    }
+
+    fifoRead += have;
+    fifoFill -= have;
+
+    // compactage : la FIFO reste petite, le memmove est rare
+    if (fifoRead > fifoSize / 2)
+    {
+        for (int c = 0; c < stretcherCh; ++c)
+            std::memmove (wetFifo.data() + (size_t) c * (size_t) fifoSize,
+                          wetFifo.data() + (size_t) c * (size_t) fifoSize + (size_t) fifoRead,
+                          sizeof (float) * (size_t) fifoFill);
+
+        fifoRead = 0;
+    }
+
+    totalIn += numSamples;
 
     // ---- 6. mélange sec / traité + gain ------------------------------------
     const double m = params.bypass ? 0.0 : (double) params.mix;
