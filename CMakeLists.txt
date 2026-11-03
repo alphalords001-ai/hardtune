@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HardTune VERSION 0.5.5 LANGUAGES C CXX)
+project(HardTune VERSION 0.5.6 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,7 +60,7 @@ juce_add_plugin(HardTune
     BUNDLE_ID                   "org.hardtune.plugin"
     PLUGIN_MANUFACTURER_CODE    Htun
     PLUGIN_CODE                 Ht01
-    VERSION                     0.5.5
+    VERSION                     0.5.6
     FORMATS                     VST3 Standalone
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -121,22 +121,16 @@ target_link_libraries(hardtune_dsp_tests PRIVATE rubberband_single)
 # ---------------------------------------------------------------------------
 #  MSVC : deux réglages indispensables pour ne PLUS faire tomber le DAW
 #
-#  1. /EHa à la place de /EHsc (imposé par JUCE) : en /EHsc, un "access
-#     violation" (déréférencement de pointeur nul, par exemple) n'est PAS une
-#     exception C++ : catch (...) ne l'attrape pas et l'hôte se ferme. En /EHa,
-#     nos try/catch le rattrapent et le plugin reste en vie.
+#  1. /EHsc (valeur par défaut de JUCE) : /EHa a été RETIRÉ en v0.5.6.
+#     C'était le seul changement de génération de code présent dans toutes les
+#     versions qui ferment le DAW au chargement (v0.5.4, v0.5.5) et absent de la
+#     v0.5.2, qui se chargeait normalement. /EHa fait poser des tables SEH sur
+#     CHAQUE fonction du binaire ; c'est le suspect n°1 de la fermeture au
+#     chargement. On revient au comportement standard pour lever le doute.
 #  2. /MAP : le fichier .map permet de traduire l'offset d'un rapport de crash
 #     ("in module HardTune.vst3, offset D5356") en nom de fonction.
 # ---------------------------------------------------------------------------
 if (MSVC)
-    if (TARGET juce_recommended_config_flags)
-        get_target_property (ht_flags juce_recommended_config_flags INTERFACE_COMPILE_OPTIONS)
-        if (ht_flags)
-            list (TRANSFORM ht_flags REPLACE "^/EHsc$" "/EHa")
-            set_target_properties (juce_recommended_config_flags
-                                   PROPERTIES INTERFACE_COMPILE_OPTIONS "${ht_flags}")
-        endif()
-    endif()
 
     foreach (ht_target HardTune HardTune_VST3 HardTune_Standalone)
         if (TARGET ${ht_target})

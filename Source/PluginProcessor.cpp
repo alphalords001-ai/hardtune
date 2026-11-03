@@ -81,7 +81,8 @@ HardTuneProcessor::HardTuneProcessor()
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     ht::diag::install();
-    ht::diag::log ("processeur : construction");
+    ht::diag::log ("processeur : construction (apres APVTS)");
+    ht::diag::log ("processeur : construction terminee");
 }
 
 void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -329,5 +330,14 @@ AudioProcessorEditor* HardTuneProcessor::createEditor()
 // ---------------------------------------------------------------------------
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new HardTuneProcessor();
+    //  Trace la plus precoce possible : si cette ligne n'apparait pas dans
+    //  %TEMP%\hardtune-diag.txt, c'est que le DAW ferme AVANT meme de creer le
+    //  plugin (chargement de la DLL) et non pendant notre code.
+    ht::diag::log ("createPluginFilter : entree");
+
+    auto* p = new HardTuneProcessor();
+
+    ht::diag::log (p != nullptr ? "createPluginFilter : processeur cree"
+                                : "createPluginFilter : processeur NUL");
+    return p;
 }
