@@ -303,21 +303,21 @@ void HardTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
 // ---------------------------------------------------------------------------
 AudioProcessorEditor* HardTuneProcessor::createEditor()
 {
-    //  Interface complete par defaut. Si le fichier
-    //      %TEMP%\hardtune-ui-minimale.txt
-    //  existe, on affiche a la place l'interface minimale (composants JUCE
-    //  standard uniquement). C'est le test de bissection : si le plugin tient
-    //  avec l'interface minimale et pas avec la complete, le defaut est dans
-    //  notre dessin ; s'il tombe dans les deux cas, il est ailleurs.
-    const bool minimalUi = ht::diag::flagExists ("hardtune-ui-minimale.txt");
+    //  Trois niveaux, choisis par des fichiers marqueurs dans %TEMP% :
+    //    hardtune-ui-vide.txt     -> editeur vide (aucun dessin, aucun enfant)
+    //    hardtune-ui-minimale.txt -> composants JUCE standard, sans dessin maison
+    //    (aucun fichier)          -> interface complete
+    const bool vide     = ht::diag::flagExists ("hardtune-ui-vide.txt");
+    const bool minimal  = ht::diag::flagExists ("hardtune-ui-minimale.txt");
 
-    ht::diag::log (minimalUi ? "createEditor : interface minimale"
-                             : "createEditor : interface complete");
+    ht::diag::log (vide ? "createEditor : editeur VIDE"
+                        : (minimal ? "createEditor : interface minimale"
+                                   : "createEditor : interface complete"));
 
     try
     {
-        if (minimalUi)
-            return new HardTuneSafeEditor (*this);
+        if (vide)    return new HardTuneBlankEditor (*this);
+        if (minimal) return new HardTuneSafeEditor (*this);
 
         return new HardTuneEditor (*this);
     }
@@ -333,6 +333,7 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
     //  Trace la plus precoce possible : si cette ligne n'apparait pas dans
     //  %TEMP%\hardtune-diag.txt, c'est que le DAW ferme AVANT meme de creer le
     //  plugin (chargement de la DLL) et non pendant notre code.
+    ht::diag::log ("=== HardTune " JucePlugin_VersionString " du " __DATE__ " " __TIME__ " ===");
     ht::diag::log ("createPluginFilter : entree");
 
     auto* p = new HardTuneProcessor();

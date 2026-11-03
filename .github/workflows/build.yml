@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $targets = @(0xD5356, 0xD5346, 0xA77C2, 0xA73DA)
+          $targets = @(0xB6302, 0xB77C2, 0xB73DA, 0xD5356, 0xD5346, 0xA77C2, 0xA73DA)
 
           try {
             $maps = @(Get-ChildItem build -Recurse -Filter *.map -ErrorAction SilentlyContinue)
@@ -64,7 +64,9 @@ jobs:
                 $cand = $sorted | Where-Object { $_.Rva -le [uint64]$t } | Select-Object -Last 1
                 if ($cand) {
                   $delta = [uint64]$t - $cand.Rva
-                  $msg = "[$tag] 0x$($t.ToString('X')) -> $($cand.Name) +0x$($delta.ToString('X')) <$($cand.Obj)>"
+                  $next = $sorted | Where-Object { $_.Rva -gt [uint64]$t } | Select-Object -First 1
+                  $suivant = if ($next) { " | suivant: $($next.Name) @0x$($next.Rva.ToString('X'))" } else { "" }
+                  $msg = "[$tag] 0x$($t.ToString('X')) -> $($cand.Name) +0x$($delta.ToString('X')) <$($cand.Obj)>$suivant"
                 } else {
                   $msg = "[$tag] 0x$($t.ToString('X')) -> (rien avant cet offset)"
                 }

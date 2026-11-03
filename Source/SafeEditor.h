@@ -112,6 +112,7 @@ private:
     void timerCallback() override
     {
         ht::diag::stage ("timer:minimal");
+        ht::diag::flushStage();
 
         const int target = proc.getTargetNote();
 
@@ -147,4 +148,40 @@ private:
     std::unique_ptr<ButtonAtt> bypassAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardTuneSafeEditor)
+};
+
+// ---------------------------------------------------------------------------
+//  Editeur VIDE : un seul rectangle uni, aucun enfant, aucun widget.
+//  Activé par le fichier marqueur %TEMP%\hardtune-ui-vide.txt.
+//  Sert à trancher : si MÊME cet éditeur fait tomber FL, le défaut n'est pas
+//  dans notre dessin (il est dans la fenêtre/le pair JUCE ou dans l'hôte).
+// ---------------------------------------------------------------------------
+class HardTuneBlankEditor : public juce::AudioProcessorEditor,
+                            private juce::Timer
+{
+public:
+    explicit HardTuneBlankEditor (HardTuneProcessor& p)
+        : juce::AudioProcessorEditor (&p)
+    {
+        ht::diag::markUiThread();
+        setAccessible (false);
+        setSize (400, 200);
+        startTimerHz (5);
+        ht::diag::log ("editeur VIDE : construction terminee");
+    }
+
+    ~HardTuneBlankEditor() override { ht::diag::log ("editeur VIDE : destruction"); }
+
+    void paint (juce::Graphics& g) override
+    {
+        ht::diag::stage ("paint:vide");
+        g.fillAll (juce::Colour (0xff202030));
+    }
+
+    void resized() override { ht::diag::stage ("resized:vide"); }
+
+private:
+    void timerCallback() override { ht::diag::flushStage(); }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardTuneBlankEditor)
 };

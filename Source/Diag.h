@@ -20,10 +20,14 @@ namespace diag
         journal (le fil audio n'a jamais le droit de toucher au disque). */
     void markUiThread() noexcept;
 
-    /** Nomme l'étape courante et l'écrit (au plus ~6 lignes par seconde).
+    /** Nomme l'étape courante (mémoire seulement : appelable depuis paint). */
+    void stage (const char* name) noexcept;
+
+    /** Écrit l'étape courante dans le journal (au plus ~5 lignes par seconde).
+        À appeler depuis le timer de l'interface, jamais depuis paint.
         Après une fermeture brutale, la dernière ligne du journal indique
         exactement la fonction où le plugin se trouvait. */
-    void stage (const char* name) noexcept;
+    void flushStage() noexcept;
 
     /** Écrit une ligne horodatée dans %TEMP%\\hardtune-diag.txt. */
     void log (const char* what) noexcept;

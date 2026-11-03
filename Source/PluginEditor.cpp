@@ -285,6 +285,10 @@ void HardTuneEditor::applyTheme()
 // ---------------------------------------------------------------------------
 void HardTuneEditor::drawCard (Graphics& g, Rectangle<int> r) const
 {
+    //  Rectangle degenere (mise en page pas encore faite) : rien a dessiner.
+    if (r.getWidth() < 2 || r.getHeight() < 2)
+        return;
+
     auto rf = r.toFloat();
     ColourGradient grad (pal.card1, rf.getX(), rf.getY(),
                          pal.card2, rf.getX(), rf.getBottom(), false);
@@ -297,6 +301,15 @@ void HardTuneEditor::drawCard (Graphics& g, Rectangle<int> r) const
 void HardTuneEditor::paint (Graphics& g)
 {
     ht::diag::stage ("paint:editeur");
+
+    //  Un hote peut peindre l'editeur avant sa mise en page (taille 1x1, 0x0).
+    //  A cette taille, tous les rectangles deviennent degeneres et JUCE remplit
+    //  des chemins impossibles : on ne dessine rien.
+    if (getWidth() < 200 || getHeight() < 160)
+    {
+        g.fillAll (pal.win1);
+        return;
+    }
 
     try
     {
@@ -511,6 +524,9 @@ void HardTuneEditor::timerCallback()
     {
         ht::diag::logOnce ("EXCEPTION rattrapee dans timerCallback");
     }
+
+    // C'est ici, et seulement ici, que le journal est ecrit.
+    ht::diag::flushStage();
 }
 
 // Lit un parametre sans jamais dereferencer un pointeur nul : getRawParameterValue

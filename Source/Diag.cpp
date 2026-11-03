@@ -87,24 +87,28 @@ void markUiThread() noexcept
 
 void stage (const char* name) noexcept
 {
+    //  Aucune ecriture disque ici : cette fonction est appelee depuis paint(),
+    //  et faire des entrees/sorties fichier dans une peinture Windows est une
+    //  mauvaise idee (verrous CRT, re-entrance). On memorise seulement.
     g_stage.store (name, std::memory_order_relaxed);
+}
 
-    //  On n'ecrit que depuis le fil de l'interface : le fil audio n'a
-    //  jamais le droit de toucher au disque.
+void flushStage() noexcept
+{
+    //  Appelee par le timer de l'interface : ecrit l'etape courante, au plus
+    //  ~5 fois par seconde. Le fil audio n'ecrit jamais.
     const auto ui = g_uiThread.load (std::memory_order_relaxed);
 
     if (ui == 0 || currentThreadId() != ui)
         return;
 
-    //  Au plus ~6 lignes par seconde : le journal reste lisible et le cout
-    //  reste negligible a 30 images par seconde.
     const auto now = nowMs();
 
-    if (now - g_lastWrite.load (std::memory_order_relaxed) < 150)
+    if (now - g_lastWrite.load (std::memory_order_relaxed) < 200)
         return;
 
     g_lastWrite.store (now, std::memory_order_relaxed);
-    append (name);
+    append (g_stage.load (std::memory_order_relaxed));
 }
 
 void log (const char* what) noexcept
