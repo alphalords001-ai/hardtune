@@ -36,6 +36,19 @@ namespace
 HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     : AudioProcessorEditor (&p), proc (p), pal (ht::lightPalette())
 {
+    //  Le fil qui construit l'editeur est le fil d'interface : lui seul a le
+    //  droit d'ecrire le journal de diagnostic.
+    ht::diag::markUiThread();
+
+    //  On retire toute l'interface de l'arbre d'accessibilite Windows (UIA).
+    //  Nos libelles changent 30 fois par seconde : chaque changement notifie
+    //  les clients UIA (overlays NVIDIA / Discord / Razer, Narrator...), qui
+    //  interrogeaient le plugin par messages de fenetre. C'est exactement la
+    //  pile du plantage (FLEngine -> USER32 -> HardTune). Un plugin de musique
+    //  n'a rien a faire dans cet arbre : setAccessible(false) couvre aussi
+    //  tous les enfants.
+    setAccessible (false);
+
     // ---- en-tête -----------------------------------------------------------
     addAndMakeVisible (titleLabel);
     makeLabel (titleLabel, "HARDTUNE", 15.0f, pal.accentDark, true);

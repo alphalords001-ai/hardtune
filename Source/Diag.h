@@ -5,8 +5,8 @@
 //  fautive ramenée en offset de module. Ça évite de dépendre du fichier .map du
 //  binaire, qui n'est pas livré avec le plugin.
 //
-//  Coût sur le fil audio : un simple store atomique. Aucune écriture disque
-//  sauf en cas de plantage.
+//  Coût sur le fil audio : un simple store atomique, aucune écriture disque.
+//  Le fil d'interface écrit au plus ~6 lignes par seconde.
 #pragma once
 
 namespace ht
@@ -16,7 +16,13 @@ namespace diag
     /** Installe le mouchard (idempotent). À appeler au plus tôt. */
     void install() noexcept;
 
-    /** Nomme l'étape courante : c'est ce nom qui sera écrit si ça plante. */
+    /** Déclare le fil courant comme fil d'interface : seul ce fil écrit le
+        journal (le fil audio n'a jamais le droit de toucher au disque). */
+    void markUiThread() noexcept;
+
+    /** Nomme l'étape courante et l'écrit (au plus ~6 lignes par seconde).
+        Après une fermeture brutale, la dernière ligne du journal indique
+        exactement la fonction où le plugin se trouvait. */
     void stage (const char* name) noexcept;
 
     /** Écrit une ligne horodatée dans %TEMP%\\hardtune-diag.txt. */
@@ -27,5 +33,8 @@ namespace diag
 
     /** Chemin du journal (lecture seule, pour l'afficher dans l'interface). */
     const char* logPath() noexcept;
+
+    /** Vrai si un fichier marqueur existe dans le dossier temporaire (%TEMP%). */
+    bool flagExists (const char* name) noexcept;
 }
 } // namespace ht

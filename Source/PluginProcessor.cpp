@@ -1,6 +1,7 @@
 //  PluginProcessor.cpp
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "SafeEditor.h"
 #include "Diag.h"
 
 using namespace juce;
@@ -301,10 +302,22 @@ void HardTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
 // ---------------------------------------------------------------------------
 AudioProcessorEditor* HardTuneProcessor::createEditor()
 {
-    ht::diag::log ("createEditor");
+    //  Interface complete par defaut. Si le fichier
+    //      %TEMP%\hardtune-ui-minimale.txt
+    //  existe, on affiche a la place l'interface minimale (composants JUCE
+    //  standard uniquement). C'est le test de bissection : si le plugin tient
+    //  avec l'interface minimale et pas avec la complete, le defaut est dans
+    //  notre dessin ; s'il tombe dans les deux cas, il est ailleurs.
+    const bool minimalUi = ht::diag::flagExists ("hardtune-ui-minimale.txt");
+
+    ht::diag::log (minimalUi ? "createEditor : interface minimale"
+                             : "createEditor : interface complete");
 
     try
     {
+        if (minimalUi)
+            return new HardTuneSafeEditor (*this);
+
         return new HardTuneEditor (*this);
     }
     catch (...)

@@ -341,17 +341,26 @@ public:
         const float R  = d * 0.5f - sw * 0.5f - 16.0f;
         const auto  c  = b.getCentre();
 
-        // anneau pointillé « technique »
-        juce::Path dots;
-        dots.addCentredArc (c.x, c.y, R + sw * 0.5f + 12.0f, R + sw * 0.5f + 12.0f, 0.0f,
-                            juce::degreesToRadians (-120.0f),
-                            juce::degreesToRadians (240.0f), true);
-        juce::PathStrokeType ps (1.4f);
-        juce::Path dashed;
-        const float dashLengths[2] = { 2.0f, 11.0f };
-        ps.createDashedStroke (dashed, dots, dashLengths, 2);
-        g.setColour (pal.accent.withAlpha (0.45f));
-        g.fillPath (dashed);
+        // Anneau pointille « technique » : des petits disques dessines un par un.
+        // Avant, on passait par PathStrokeType::createDashedStroke + fillPath
+        // (code interne de JUCE, appele 30 fois par seconde et alimentait le
+        // remplissage de chemins). Visuellement identique, sans ce detour.
+        {
+            const float rDots = R + sw * 0.5f + 12.0f;
+
+            g.setColour (pal.accent.withAlpha (0.45f));
+
+            for (int k = 0; k < 72; ++k)
+            {
+                if ((k % 4) == 3)
+                    continue;                       // le « tiret » de 11 px : un trou
+
+                const float a = juce::degreesToRadians (-120.0f + 240.0f * (float) k / 71.0f);
+                g.fillEllipse (c.x + std::cos (a) * rDots - 0.9f,
+                               c.y + std::sin (a) * rDots - 0.9f,
+                               1.8f, 1.8f);
+            }
+        }
 
         // ventre
         auto face = juce::Rectangle<float> (R - sw * 0.5f - 3.0f, R - sw * 0.5f - 3.0f);
