@@ -1,5 +1,6 @@
 //  PluginEditor.cpp — l'interface, dessinée à la main.
 #include "PluginEditor.h"
+#include "Diag.h"
 
 using namespace juce;
 
@@ -183,9 +184,14 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     applyTheme();
     setSize (kWindowW, kWindowH);
     startTimerHz (30);
+
+    ht::diag::log ("editeur : construction terminee");
 }
 
-HardTuneEditor::~HardTuneEditor() = default;
+HardTuneEditor::~HardTuneEditor()
+{
+    ht::diag::log ("editeur : destruction");
+}
 
 // ---------------------------------------------------------------------------
 Label& HardTuneEditor::makeLabel (Label& l, const String& text, float height,
@@ -277,6 +283,8 @@ void HardTuneEditor::drawCard (Graphics& g, Rectangle<int> r) const
 
 void HardTuneEditor::paint (Graphics& g)
 {
+    ht::diag::stage ("paint:editeur");
+
     try
     {
     auto b = getLocalBounds().toFloat();
@@ -322,13 +330,15 @@ void HardTuneEditor::paint (Graphics& g)
     }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:editeur");
     }
 }
 
 // ---------------------------------------------------------------------------
 void HardTuneEditor::resized()
 {
+    ht::diag::stage ("resized");
+
     auto r = getLocalBounds();
     rHeader = r.removeFromTop (kHeaderH);
 
@@ -475,6 +485,8 @@ void HardTuneEditor::resized()
 // ---------------------------------------------------------------------------
 void HardTuneEditor::timerCallback()
 {
+    ht::diag::stage ("timer");
+
     // Le timer tourne sur le fil d'interface. Une exception ou un pointeur nul
     // ici fait tomber l'hote tout entier (le plugin tourne dans son processus) :
     // on ne laisse donc jamais rien s'echapper.
@@ -484,7 +496,7 @@ void HardTuneEditor::timerCallback()
     }
     catch (...)
     {
-        // on garde l'interface figee plutot que de tuer le DAW
+        ht::diag::logOnce ("EXCEPTION rattrapee dans timerCallback");
     }
 }
 

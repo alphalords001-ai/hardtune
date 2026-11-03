@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HardTune VERSION 0.5.3 LANGUAGES C CXX)
+project(HardTune VERSION 0.5.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,7 +60,7 @@ juce_add_plugin(HardTune
     BUNDLE_ID                   "org.hardtune.plugin"
     PLUGIN_MANUFACTURER_CODE    Htun
     PLUGIN_CODE                 Ht01
-    VERSION                     0.5.3
+    VERSION                     0.5.4
     FORMATS                     VST3 Standalone
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -70,6 +70,8 @@ juce_add_plugin(HardTune
     COPY_PLUGIN_AFTER_BUILD     TRUE)
 
 target_sources(HardTune PRIVATE
+    Source/Diag.cpp
+    Source/Diag.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp

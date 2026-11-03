@@ -1,6 +1,7 @@
 //  PluginProcessor.cpp
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Diag.h"
 
 using namespace juce;
 
@@ -78,6 +79,8 @@ HardTuneProcessor::HardTuneProcessor()
                           .withOutput ("Output", AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
+    ht::diag::install();
+    ht::diag::log ("processeur : construction");
 }
 
 void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -89,6 +92,9 @@ void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     // Les tampons du moteur sont realloues ici : si l'hote appelait prepareToPlay
     // pendant un bloc audio (certains le font au demarrage de la lecture), le
     // fil audio lirait de la memoire liberee. Le verrou rend les deux exclusifs.
+    ht::diag::stage ("prepareToPlay");
+    ht::diag::log ("prepareToPlay");
+
     const juce::ScopedLock sl (getCallbackLock());
 
     currentSampleRate = (sampleRate > 0.0 ? sampleRate : 44100.0);
@@ -105,6 +111,7 @@ void HardTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     catch (const std::exception& e)
     {
         // Le plugin reste charge et transparent plutot que de tuer l'hote.
+        ht::diag::log (("EXCEPTION dans prepareToPlay : " + juce::String (e.what())).toRawUTF8());
         DBG ("HardTune: prepareToPlay a echoue - " << e.what());
         try { core.prepare (currentSampleRate, 512, 1); } catch (...) {}
         setLatencySamples (0);
@@ -199,6 +206,9 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midi);
 
+    ht::diag::logOnce ("premier appel a processBlock");
+    ht::diag::stage ("processBlock");
+
     const juce::ScopedLock sl (getCallbackLock());
 
     const int numSamples  = buffer.getNumSamples();
@@ -232,6 +242,7 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     }
     catch (...)
     {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans processBlock");
         return;   // on laisse le tampon tel quel : silence plutot que plantage
     }
 
@@ -290,6 +301,8 @@ void HardTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
 // ---------------------------------------------------------------------------
 AudioProcessorEditor* HardTuneProcessor::createEditor()
 {
+    ht::diag::log ("createEditor");
+
     try
     {
         return new HardTuneEditor (*this);

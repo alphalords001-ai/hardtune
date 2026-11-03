@@ -12,6 +12,7 @@
 #include <cmath>
 
 #include "Theme.h"
+#include "../Diag.h"
 
 namespace ht
 {
@@ -34,6 +35,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:knob");
     try
     {
         auto b = getLocalBounds().toFloat();
@@ -83,7 +85,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:knob");
     }
 }
 
@@ -109,6 +111,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:barre");
     try
     {
         auto b = getLocalBounds().toFloat();
@@ -149,7 +152,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:barre");
     }
 }
 
@@ -173,6 +176,7 @@ public:
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
+        ht::diag::stage ("paint:interrupteur");
     try
     {
         auto b = getLocalBounds().toFloat().reduced (0.5f);
@@ -213,7 +217,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:interrupteur");
     }
 }
 
@@ -239,6 +243,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:clavier");
     try
     {
         auto r = getLocalBounds().toFloat();
@@ -287,7 +292,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:clavier");
     }
 }
 
@@ -323,6 +328,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:cadran");
     try
     {
         auto b = getLocalBounds().toFloat();
@@ -408,7 +414,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:cadran");
     }
 }
 
@@ -438,6 +444,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:oscilloscope");
     try
     {
         auto b = getLocalBounds().toFloat();
@@ -492,7 +499,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:oscilloscope");
     }
 }
 
@@ -519,6 +526,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:vu-metre");
     try
     {
         auto b = getLocalBounds();
@@ -557,7 +565,7 @@ public:
         }
     catch (...)
     {
-        // jamais de crash dans l'hote : on laisse la zone telle quelle
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:vu-metre");
     }
 }
 
