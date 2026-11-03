@@ -195,7 +195,25 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     bypassSwitch.setCompact (true);
 
     applyTheme();
+
+    // Adapte la fenetre a l'ecran : 820x600 ne tient pas sur tous les ecrans
+    // (1080p avec barres, portables, mise a l'echelle 125-150 %).
+    {
+        double scale = 1.0;
+
+        if (auto* d = Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        {
+            const auto area = d->userBounds;   // zone utile, en points logiques
+            const double sx = (double) area.getWidth()  * 0.90 / (double) kWindowW;
+            const double sy = (double) area.getHeight() * 0.85 / (double) kWindowH;
+            scale = jlimit (0.50, 1.0, jmin (sx, sy));
+        }
+
+        setScaleFactor ((float) scale);
+    }
+
     setSize (kWindowW, kWindowH);
+    lastDark = darkSwitch.getToggleState();
     startTimerHz (30);
 
     ht::diag::log ("editeur : construction terminee");
@@ -203,6 +221,10 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 
 HardTuneEditor::~HardTuneEditor()
 {
+    // Le minuteur doit etre arrete avant que l'editeur ne disparaisse : sinon
+    // un rappel peut arriver pendant/pres la destruction (acces a un objet mort).
+    stopTimer();
+
     ht::diag::log ("editeur : destruction");
 }
 
@@ -544,7 +566,6 @@ float HardTuneEditor::paramValue (const char* id, float fallback) const
 void HardTuneEditor::refreshFromProcessor()
 {
     // thème (interrupteur LIGHT / DARK)
-    static bool lastDark = false;
     if (darkSwitch.getToggleState() != lastDark)
     {
         lastDark = darkSwitch.getToggleState();

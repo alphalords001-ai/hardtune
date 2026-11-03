@@ -36,6 +36,10 @@ private:
     HardTuneProcessor& proc;
     ht::Palette pal;
 
+    /** Dernier theme applique. Membre et non `static` : un static dans une
+        fonction membre est partage par TOUTES les instances du plugin. */
+    bool lastDark = false;
+
     // ---- en-tête -----------------------------------------------------------
     juce::Label  titleLabel, keyCaption, scaleCaption, lightCaption, darkCaption, bypassCaption;
     juce::ComboBox keyBox, scaleBox;

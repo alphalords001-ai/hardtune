@@ -89,9 +89,13 @@ private:
 
     tune::TuneCore core;
 
-    std::vector<float> scopeBuf { (size_t) kScopeSize, 0.0f };
+    // ATTENTION : ne JAMAIS initialiser un vecteur de floats avec des accolades.
+    // "v { n, 0.0f }" cree un vecteur de 2 elements (n et 0.0f) au lieu de n :
+    // processBlock ecrivait alors jusqu'a l'indice 2047 dans 2 emplacements ->
+    // corruption du tas, plantage dans ntdll ("Write of address 0x24").
+    std::vector<float> scopeBuf = std::vector<float> ((size_t) kScopeSize, 0.0f);
     std::atomic<int>   scopeWrite { 0 };
-    std::vector<float> centsBuf { (size_t) kCentsCount, 0.0f };
+    std::vector<float> centsBuf = std::vector<float> ((size_t) kCentsCount, 0.0f);
     std::atomic<int>   centsWrite { 0 };
     double currentSampleRate = 44100.0;
     int    currentBlockSize  = 512;
