@@ -3,7 +3,11 @@
 Correcteur de hauteur temps réel (VST3) pour Windows et Linux — l'effet « hard tune »
 assumé, à la T-Pain, avec gamme et vitesse de correction, à 2,7 ms de latence.
 
-> **État : v0.8.0 — moteur Live à 2,7 ms, validé numériquement.**
+> **État : v0.8.1 — moteur Live à 2,7 ms, commutateur PITCH CORRECTION retiré.**
+>
+> Le commutateur PITCH CORRECTION a été retiré en v0.8.1 : il ne coupait que
+> l'accord et laissait vibrato et humanize actifs. Procédure de retour arrière :
+> `docs/REVENIR-SUR-LE-RETRAIT.md`.
 > Voir `ETAT-DU-PROJET.md` pour le suivi précis.
 
 ---
