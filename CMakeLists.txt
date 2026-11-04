@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HardTune VERSION 0.5.0 LANGUAGES C CXX)
+project(HardTune VERSION 0.8.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,48 +19,26 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 # ---------------------------------------------------------------------------
-#  Windows : les macros min/max de Windows.h cassent les std::max(...) de
-#  Rubber Band (erreur MSVC C2589 « illegal token on right side of '::' »).
-#  NOMINMAX les supprime : c'est la correction officielle de ce problème.
+#  Windows : NOMINMAX supprime les macros min/max de Windows.h, qui entrent en
+#  conflit avec std::min / std::max (erreur MSVC C2589). Laissé en place : le
+#  moteur actuel n'en dépend plus, mais JUCE et les en-têtes système si.
 # ---------------------------------------------------------------------------
 if (WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 # ---------------------------------------------------------------------------
-#  Rubber Band Library (moteur de transposition, licence GPL v2+)
-#  Version "fichier unique" : aucun système de build à gérer, un seul .cpp.
-# ---------------------------------------------------------------------------
-FetchContent_Declare(rubberband
-    GIT_REPOSITORY https://github.com/breakfastquay/rubberband.git
-    GIT_TAG        v4.0.0
-    GIT_SHALLOW    TRUE
-    SOURCE_SUBDIR  no-cmake-here)   # évite add_subdirectory (le projet utilise meson)
-FetchContent_MakeAvailable(rubberband)
-
-add_library(rubberband_single STATIC
-    ${rubberband_SOURCE_DIR}/single/RubberBandSingle.cpp)
-target_include_directories(rubberband_single PUBLIC ${rubberband_SOURCE_DIR})
-# ceinture et bretelles : ces deux macros doivent être définies pour ce fichier
-target_compile_definitions(rubberband_single PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_features(rubberband_single PUBLIC cxx_std_17)
-set_target_properties(rubberband_single PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-# MSVC : le fichier unique de Rubber Band est volumineux
-if (MSVC)
-    target_compile_options(rubberband_single PRIVATE /bigobj)
-endif()
-
-# ---------------------------------------------------------------------------
 #  Le plugin
 # ---------------------------------------------------------------------------
 juce_add_plugin(HardTune
-    PRODUCT_NAME                "HardTune"
-    COMPANY_NAME                "HardTune (open source)"
+    #  Nom commercial du produit (visible dans le navigateur de plugins du DAW)
+    #  et nom du vendeur (colonne "Vendor" / "Editeur").
+    PRODUCT_NAME                "Alpha-Tune"
+    COMPANY_NAME                "Alpha Production"
     BUNDLE_ID                   "org.hardtune.plugin"
     PLUGIN_MANUFACTURER_CODE    Htun
     PLUGIN_CODE                 Ht01
-    VERSION                     0.5.0
+    VERSION                     0.8.1
     FORMATS                     VST3 Standalone
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -70,6 +48,9 @@ juce_add_plugin(HardTune
     COPY_PLUGIN_AFTER_BUILD     TRUE)
 
 target_sources(HardTune PRIVATE
+    Source/Diag.cpp
+    Source/Diag.h
+    Source/SafeEditor.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
@@ -78,6 +59,8 @@ target_sources(HardTune PRIVATE
     Source/dsp/TuneCore.h
     Source/dsp/PitchDetector.cpp
     Source/dsp/PitchDetector.h
+    Source/dsp/LiveEngine.cpp
+    Source/dsp/LiveEngine.h
     Source/dsp/NoteMapper.h
     Source/dsp/TuneMath.h
     Source/gui/HardTuneLookAndFeel.cpp
@@ -94,7 +77,6 @@ target_compile_definitions(HardTune PUBLIC
 
 target_link_libraries(HardTune
     PRIVATE
-        rubberband_single
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_gui_basics
@@ -109,11 +91,34 @@ target_link_libraries(HardTune
 add_executable(hardtune_dsp_tests
     tests/dsp_offline.cpp
     Source/dsp/PitchDetector.cpp
+    Source/dsp/LiveEngine.cpp
     Source/dsp/TuneCore.cpp)
 
 target_include_directories(hardtune_dsp_tests PRIVATE Source/dsp)
 target_compile_features(hardtune_dsp_tests PRIVATE cxx_std_17)
-target_link_libraries(hardtune_dsp_tests PRIVATE rubberband_single)
+
+# ---------------------------------------------------------------------------
+#  MSVC : deux réglages indispensables pour ne PLUS faire tomber le DAW
+#
+#  1. /EHsc (valeur par défaut de JUCE) : /EHa a été RETIRÉ en v0.5.6.
+#     C'était le seul changement de génération de code présent dans toutes les
+#     versions qui ferment le DAW au chargement (v0.5.4, v0.5.5) et absent de la
+#     v0.5.2, qui se chargeait normalement. /EHa fait poser des tables SEH sur
+#     CHAQUE fonction du binaire ; c'est le suspect n°1 de la fermeture au
+#     chargement. On revient au comportement standard pour lever le doute.
+#  2. /MAP : le fichier .map permet de traduire l'offset d'un rapport de crash
+#     ("in module HardTune.vst3, offset D5356") en nom de fonction.
+# ---------------------------------------------------------------------------
+if (MSVC)
+
+    foreach (ht_target HardTune HardTune_VST3 HardTune_Standalone)
+        if (TARGET ${ht_target})
+            target_link_options (${ht_target} PRIVATE
+                "/MAP:$<TARGET_FILE_DIR:${ht_target}>/HardTune-${ht_target}.map"
+                /MAPINFO:EXPORTS)
+        endif()
+    endforeach()
+endif()
 
 # ---------------------------------------------------------------------------
 #  Compilation Linux : compatibilité des vieilles distributions (glibc)

@@ -1,9 +1,13 @@
 # HardTune
 
 Correcteur de hauteur temps réel (VST3) pour Windows et Linux — l'effet « hard tune »
-assumé, à la T-Pain, avec gamme, vitesse de correction et formants.
+assumé, à la T-Pain, avec gamme et vitesse de correction, à 2,7 ms de latence.
 
-> **État : v0.1 — moteur validé numériquement, premier build Windows à faire.**
+> **État : v0.8.1 — moteur Live à 2,7 ms, commutateur PITCH CORRECTION retiré.**
+>
+> Le commutateur PITCH CORRECTION a été retiré en v0.8.1 : il ne coupait que
+> l'accord et laissait vibrato et humanize actifs. Procédure de retour arrière :
+> `docs/REVENIR-SUR-LE-RETRAIT.md`.
 > Voir `ETAT-DU-PROJET.md` pour le suivi précis.
 
 ---
@@ -14,11 +18,12 @@ assumé, à la T-Pain, avec gamme, vitesse de correction et formants.
 - 12 tonalités × 8 gammes + gamme personnalisée (12 interrupteurs)
 - **Retune Speed** 0 → 800 ms (0 = hard tune instantané)
 - **Amount** 0 → 100 % (dosage de la correction)
-- **Formant / Throat** −100 → +100 % (timbre, sans changer la note)
+- ~~**Formant / Throat**~~ — **inactif depuis la v0.8.0** : un moteur à ligne à retard
+  déplace les formants avec la hauteur. Le paramètre est conservé pour les presets.
 - Transposition ±6 demi-tons, Mix dry/wet, gain de sortie, bypass
 - Interface : roue de tonalités, écran de note détectée, aiguille de justesse en cents
 - 6 presets d'usine dont **T-PAIN**
-- Latence annoncée au DAW (~31 ms à 48 kHz), compensée automatiquement par l'hôte
+- Latence annoncée au DAW (~2,7 ms à 48 kHz), compensée automatiquement par l'hôte
 
 ## Compiler
 
@@ -49,9 +54,10 @@ Source/
 │   ├── HardTuneLookAndFeel.*   identité visuelle (sombre / néon)
 │   └── PitchDisplay.*          note détectée + aiguille de cents
 └── dsp/                    ← C++ pur, AUCUNE dépendance JUCE
-    ├── PitchDetector.*     détection YIN
+    ├── PitchDetector.*     détection MPM/NSDF, fenêtre adaptative
     ├── NoteMapper.h        gammes, note cible
-    ├── TuneCore.*          quantification + synthèse PSOLA
+    ├── TuneCore.*          quantification + décision de hauteur
+    ├── LiveEngine.*        ligne à retard à lecture pitch-synchrone
     └── TuneMath.h
 tests/dsp_offline.cpp       tests numériques hors DAW
 ```
@@ -61,15 +67,19 @@ vérifier la justesse par la mesure et non « à l'oreille ».
 
 ## Comment ça marche (résumé)
 
-1. **Détection** — YIN sur une fenêtre de 1024 samples, toutes les 128 samples ;
-   précision mesurée < 0,1 cent sur signal tenu.
+1. **Détection** — MPM/NSDF, analyse toutes les 128 samples, sur une fenêtre
+   dimensionnée à 2,2 périodes de la note suivie (5 à 20 ms) : précision mesurée
+   < 0,1 cent sur signal tenu.
 2. **Quantification** — hauteur → note MIDI flottante → note autorisée la plus proche de la
    gamme choisie, avec hystérésis pour éviter les sauts entre deux notes.
 3. **Correction** — ratio de fréquence, lissé dans le temps selon *Retune Speed* et pondéré
    par *Amount*.
-4. **Synthèse PSOLA** — grains pitch-synchrones (marques de pitch recalées par corrélation),
-   placés au pas de la période cible : la hauteur change, les formants restent.
-   Les passages non voisés (souffle, consonnes) sont renvoyés en signal sec.
+4. **Lecture pitch-synchrone** — le passé est lu à la vitesse `2^(cents/1200)`.
+   Quand le point de lecture a dérivé d'un cycle, on saute exactement une période
+   (recherchée par corrélation, fondue sur une fraction de période). Plus de
+   tampon de grains, donc plus de retard : la correction s'applique tout de suite.
+   Les passages non voisés (souffle, consonnes) sont lus à la vitesse de l'entrée,
+   donc rendus tels quels.
 
 ## Licence
 

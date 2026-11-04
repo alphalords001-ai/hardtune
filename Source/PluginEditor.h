@@ -19,6 +19,13 @@ public:
 
 private:
     void timerCallback() override;
+
+    /** Corps du timer : appelé sous try/catch, ne doit jamais laisser passer d'exception. */
+    void refreshFromProcessor();
+
+    /** Lecture tolérante d'un paramètre (getRawParameterValue peut renvoyer nullptr). */
+    float paramValue (const char* id, float fallback = 0.0f) const;
+
     void applyTheme();
     void drawCard (juce::Graphics&, juce::Rectangle<int>) const;
 
@@ -28,6 +35,10 @@ private:
 
     HardTuneProcessor& proc;
     ht::Palette pal;
+
+    /** Dernier theme applique. Membre et non `static` : un static dans une
+        fonction membre est partage par TOUTES les instances du plugin. */
+    bool lastDark = false;
 
     // ---- en-tête -----------------------------------------------------------
     juce::Label  titleLabel, keyCaption, scaleCaption, lightCaption, darkCaption, bypassCaption;
@@ -44,8 +55,7 @@ private:
     ht::Knob     retuneKnob;                 // Ø92
     juce::Label  humanizeCaption, humanizeValue, flexCaption, flexValue;
     ht::Knob     humanizeKnob, flexKnob;     // Ø68
-    juce::Label  corrCaption, corrState, vibCaption, vibValue, rateCaption, rateValue;
-    ht::PillSwitch corrSwitch { "correction" };
+    juce::Label  vibCaption, vibValue, rateCaption, rateValue;
     ht::Knob     vibratoKnob, rateKnob;
     ht::LevelMeter meterIn, meterOut;
 
@@ -62,7 +72,7 @@ private:
 
     std::unique_ptr<SliderAtt> retuneAtt, humanizeAtt, flexAtt, vibratoAtt, rateAtt,
                                formantAtt, transposeAtt;
-    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt, corrAtt;
+    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt;
     std::unique_ptr<ComboAtt>  keyAtt, scaleAtt;
 
     // rectangles des cartes (dessinées dans paint)

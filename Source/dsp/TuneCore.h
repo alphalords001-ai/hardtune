@@ -1,33 +1,35 @@
-//  TuneCore.h — moteur de correction de hauteur.
+//  TuneCore.h — moteur de correction de hauteur (v0.7.0).
 //
-//  v2 : la synthèse est confiée à Rubber Band Library (moteur R3 « finer »,
-//  fenêtre courte, préservation des formants). La détection de hauteur (YIN) et
-//  la quantification sur la gamme restent maison.
+//  Chaîne complète :
 //
-//  Pourquoi ce changement : la première version utilisait un PSOLA maison qui
-//  produisait des craquements et une modulation d'amplitude (« robot qui se vide
-//  d'énergie »). Rubber Band est une bibliothèque de référence, utilisée entre
-//  autres par Ardour, Bitwig et Sonic Visualiser : anti-clic natif, formants
-//  préservés, latence annoncée de façon fiable.
+//      PitchDetector (MPM/NSDF, 70-1000 Hz)
+//            -> décision de hauteur : note visée, tolérance, lissage
+//            -> LiveEngine (ligne à retard à lecture pitch-synchrone)
 //
-//  Gestion des canaux : UN SEUL stretcher pour tous les canaux, ce qui garantit
-//  que gauche et droite sont traitées exactement de la même façon (un signal
-//  mono reste mono). L'ancienne version traitait les canaux séparément, d'où
-//  l'effet stéréo parasite signalé au test.
+//  Ce que la v0.7.0 change par rapport à la v0.6.2 :
 //
-//  Licence : Rubber Band est GPL v2+ ; ce projet est GPL v3, donc compatible.
+//    - Rubber Band (vocodeur de phase, 56 ms de retard) est remplacé par un
+//      moteur temporel TD-PSOLA : 25,3 ms à 48 kHz (26,1 ms à 44,1 kHz),
+//      annoncés au DAW et mesurés (écart < 2,5 ms) ;
+//    - YIN est remplacé par MPM/NSDF : même précision, pas d'erreur d'octave
+//      par construction (on prend le PREMIER pic, pas le puits le plus profond) ;
+//    - les segments non voisés (sibilantes « S », plosives « T »/« P »,
+//      souffle) passent en direct, sans passer par le moteur : plus d'artefacts
+//      métalliques sur les consonnes ;
+//    - les formants sont préservés par construction (les grains sont recopiés
+//      tels quels, jamais rééchantillonnés) ;
+//    - plus aucune allocation mémoire dans process() : tout est alloué dans
+//      prepare().
 #pragma once
 
 #include <vector>
 #include <atomic>
-#include <memory>
 #include <cstddef>
 
 #include "PitchDetector.h"
 #include "NoteMapper.h"
 #include "TuneMath.h"
-
-namespace RubberBand { class RubberBandStretcher; }
+#include "LiveEngine.h"
 
 namespace tune
 {
@@ -49,6 +51,11 @@ public:
         float humanize    = 0.0f;    // 0 .. 1  -> derive aléatoire lente (±15 cents)
         float vibrato     = 0.0f;    // 0 .. 1  -> vibrato ajouté (±50 cents)
         float vibratoHz   = 6.0f;    // 0.1 .. 12 Hz
+
+        // --- v0.7.0 : réglages internes, sans identifiant d'automation ------
+        //  (aucun paramètre existant n'est renommé : les presets restent valides)
+        float noteRampMs  = 21.0f;   // rampe appliquée UNIQUEMENT aux changements de note
+        float sibilantMs  = 20.0f;   // maintien de la correction après une consonne
     };
 
     TuneCore();
@@ -63,7 +70,7 @@ public:
     /** Traite un bloc (in et out peuvent pointer sur les mêmes canaux). */
     void process (const float* const* in, float* const* out, int numSamples, int numChannels);
 
-    int latencySamples() const noexcept        { return latency; }
+    int latencySamples() const noexcept        { return engine.latencySamples(); }
 
     // ---- informations pour l'interface -------------------------------------
     float getDetectedHz()   const noexcept { return uiHz.load(); }
@@ -80,54 +87,51 @@ public:
     float getOutputRmsDb()  const noexcept { return uiOutRms.load(); }
 
 private:
-    struct Frame
-    {
-        long long pos = 0;
-        double hz = 0.0;
-        bool   voiced = false;
-        double ratio = 1.0;
-        int    target = -1;
-    };
-
-    void   pushFrame (long long pos, double hz, double conf);
-    double currentRatio() const;
-    double formantRatio() const;
+    /** Une trame de décision, produite à chaque analyse du détecteur. */
+    void   updateDecision (const PitchDetector::Estimate& e);
+    double humanizeCents();
 
     // --- configuration ------------------------------------------------------
     double sr = 48000.0;
     int    maxBlock = 512;
     int    numChannels = 1;
+    std::atomic<bool> ready { false };
     Params params;
 
-    // --- synthèse -----------------------------------------------------------
-    std::unique_ptr<RubberBand::RubberBandStretcher> stretcher;
-    int latency = 0;
-
-    std::vector<float> tmpWet;        // sortie brute du stretcher (maxBlock * canaux)
-    std::vector<float> dryDelay;      // retard du chemin sec (canaux * taille)
-    int dryMask = 0;
-    long long writePos = 0;
-    long long totalIn = 0;
-
-    // --- détection ----------------------------------------------------------
+    // --- moteurs ------------------------------------------------------------
     PitchDetector detector;
-    std::vector<PitchDetector::Estimate> estimates;
-    std::vector<Frame> frames;
+    LiveEngine   engine;
 
-    // --- quantification -----------------------------------------------------
+    // --- décision de hauteur ------------------------------------------------
     NoteMapper mapper;
-    int    stickyNote = 60;
+    int    stickyNote  = 60;
     bool   stickyValid = false;
-    double smoothedRatio = 1.0;
-    double lastGoodPeriod = 0.0;
+    int    lastTarget  = -1;
+    double lastHz      = 0.0;    // dernière hauteur acceptée (garde de continuité)
+    double candHz      = 0.0;    // valeur en attente de confirmation
+    int    candCount   = 0;
+    double ratioTarget = 1.0;
+    double ratioSm     = 1.0;
+    double logHzSm     = 0.0;    // logarithme de la hauteur de SORTIE visée
+    double corrCentsSm = 0.0;    // CORRECTION lissée, en cents (pas la hauteur)
+    double periodSm    = 0.0;
+    double mixTarget   = 0.0;
+    double amountSm    = 1.0;
+    int    holdSamples = 0;
+
+    // --- état voisé ----------------------------------------------------------
+    //  Vrai tant que le détecteur entend une hauteur, y compris pendant le
+    //  maintien après consonne : c'est ce que le moteur doit savoir pour décider
+    //  s'il peut sauter un cycle.
+    bool   voicedNow = false;
+    int    unvoicedFrames = 0;   // hops consécutifs sans hauteur
 
     // --- humanize / vibrato -------------------------------------------------
     unsigned int rngState = 0x12345678u;
-    double humanizeWalk  = 0.0;      // -1 .. +1, filtré
-    double humanizeTarget= 0.0;      // -1 .. +1, tiré toutes les ~200 ms
     int    humanizeTicks = 0;
+    double humanizeWalk  = 0.0;
+    double humanizeTarget= 0.0;
     double vibratoPhase  = 0.0;
-    double humanizeCents ();
 
     // --- vu-mètres ----------------------------------------------------------
     double inPeakLin  = 0.0, inRmsLin  = 0.0;

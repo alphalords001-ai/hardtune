@@ -12,7 +12,11 @@ namespace ht
 /** Police unique de l'interface (type Gill Sans / sans-serif, jamais grasse). */
 inline juce::Font font (float height, bool bold = false)
 {
-    return juce::Font (juce::FontOptions (height).withStyle (bold ? "Bold" : "Regular"));
+    // Une hauteur <= 0 fait renvoyer un "typeface" nul par JUCE, et dessiner du
+    // texte avec un typeface nul est un dereferencement de pointeur nul
+    // ("Read of address 0x0") : on borne toujours.
+    return juce::Font (juce::FontOptions (juce::jlimit (5.0f, 400.0f, height))
+                           .withStyle (bold ? "Bold" : "Regular"));
 }
 
 struct Palette

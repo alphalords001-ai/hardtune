@@ -1,0 +1,132 @@
+diff --git a/Source/PluginEditor.cpp b/Source/PluginEditor.cpp
+index 1823324..ad9b6da 100644
+--- a/Source/PluginEditor.cpp
++++ b/Source/PluginEditor.cpp
+@@ -114,6 +114,12 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
+     makeLabel (flexValue, "40 %", 11.0f, pal.ink);
+     flexValue.setJustificationType (Justification::centred);
+ 
++    addAndMakeVisible (corrCaption);
++    makeCaption (corrCaption, "PITCH CORRECTION", 9.5f);
++    addAndMakeVisible (corrSwitch);
++    addAndMakeVisible (corrState);
++    makeLabel (corrState, "ON", 10.5f, pal.accent);
++
+     addAndMakeVisible (vibCaption);
+     makeCaption (vibCaption, "VIBRATO", 9.5f);
+     addAndMakeVisible (vibratoKnob);
+@@ -185,6 +191,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
+ 
+     darkAtt   = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kDarkMode,   darkSwitch);
+     bypassAtt = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kBypass,     bypassSwitch);
++    corrAtt   = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kCorrection, corrSwitch);
+ 
+     keyAtt   = std::make_unique<ComboAtt> (st, HardTuneProcessor::kKey,   keyBox);
+     scaleAtt = std::make_unique<ComboAtt> (st, HardTuneProcessor::kScale, scaleBox);
+@@ -264,8 +271,8 @@ void HardTuneEditor::applyTheme()
+     noteLabel.setColour (Label::textColourId, pal.accentDark);
+ 
+     for (Label* l : { &scopeCaption, &retuneCaption, &humanizeCaption, &flexCaption,
+-                      &vibCaption, &rateCaption, &pitchCaption,
+-                      &targetCaption, &formantCaption, &transposeCaption })
++                      &corrCaption, &vibCaption, &rateCaption, &pitchCaption,
++                      &targetCaption, &formantCaption, &transposeCaption, &corrState })
+         l->setColour (Label::textColourId, pal.inkSoft);
+ 
+     for (Label* l : { &humanizeValue, &flexValue, &vibValue, &rateValue,
+@@ -287,6 +294,7 @@ void HardTuneEditor::applyTheme()
+ 
+     darkSwitch.setPalette (pal);
+     bypassSwitch.setPalette (pal);
++    corrSwitch.setPalette (pal);
+     retuneKnob.setPalette (pal);
+     humanizeKnob.setPalette (pal);
+     flexKnob.setPalette (pal);
+@@ -472,11 +480,12 @@ void HardTuneEditor::resized()
+     // ---- carte PITCH CORRECTION / VIBRATO / RATE ---------------------------
+     {
+         auto c = rCorrCard.reduced (10, 9);
+-        //  v0.8.1 : plus de commutateur PITCH CORRECTION. La carte ne contient
+-        //  plus que VIBRATO et RATE ; on centre le bloc verticalement au lieu de
+-        //  laisser la place vide qu'occupait le commutateur.
+-        constexpr int kKnobBlockH = 12 + 48 + 12;
+-        c.removeFromTop (std::max (0, (c.getHeight() - kKnobBlockH) / 2));
++        auto titleRow = c.removeFromTop (24);
++        corrCaption.setBounds (titleRow.removeFromLeft (128));
++        corrState.setBounds (titleRow.removeFromRight (28).withSizeKeepingCentre (28, 12));
++        corrSwitch.setBounds (titleRow.removeFromRight (56).withSizeKeepingCentre (56, 22));
++
++        c.removeFromTop (6);
+         auto knobs = c;
+ 
+         auto left1 = knobs.removeFromLeft (knobs.getWidth() / 2);
+@@ -620,4 +629,7 @@ void HardTuneEditor::refreshFromProcessor()
+     const int tr = (int) std::lround (raw (HardTuneProcessor::kTranspose));
+     transposeValue.setText (signedInt (tr) + " st", dontSendNotification);
+ 
++    corrState.setText (corrSwitch.getToggleState() ? "ON" : "OFF", dontSendNotification);
++    corrState.setColour (Label::textColourId,
++                         corrSwitch.getToggleState() ? pal.accent : pal.inkFaint);
+ }
+diff --git a/Source/PluginEditor.h b/Source/PluginEditor.h
+index e37448c..74888c2 100644
+--- a/Source/PluginEditor.h
++++ b/Source/PluginEditor.h
+@@ -55,7 +55,8 @@ private:
+     ht::Knob     retuneKnob;                 // Ø92
+     juce::Label  humanizeCaption, humanizeValue, flexCaption, flexValue;
+     ht::Knob     humanizeKnob, flexKnob;     // Ø68
+-    juce::Label  vibCaption, vibValue, rateCaption, rateValue;
++    juce::Label  corrCaption, corrState, vibCaption, vibValue, rateCaption, rateValue;
++    ht::PillSwitch corrSwitch { "correction" };
+     ht::Knob     vibratoKnob, rateKnob;
+     ht::LevelMeter meterIn, meterOut;
+ 
+@@ -72,7 +73,7 @@ private:
+ 
+     std::unique_ptr<SliderAtt> retuneAtt, humanizeAtt, flexAtt, vibratoAtt, rateAtt,
+                                formantAtt, transposeAtt;
+-    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt;
++    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt, corrAtt;
+     std::unique_ptr<ComboAtt>  keyAtt, scaleAtt;
+ 
+     // rectangles des cartes (dessinées dans paint)
+diff --git a/Source/PluginProcessor.cpp b/Source/PluginProcessor.cpp
+index d75345c..f1dc817 100644
+--- a/Source/PluginProcessor.cpp
++++ b/Source/PluginProcessor.cpp
+@@ -68,6 +68,7 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
+ 
+     layout.add (std::make_unique<AudioParameterBool> (kBypass, "Bypass", false));
+     layout.add (std::make_unique<AudioParameterBool> (kDarkMode, "Dark mode", false));
++    layout.add (std::make_unique<AudioParameterBool> (kCorrection, "Pitch correction", true));
+     layout.add (std::make_unique<AudioParameterBool> (kCustomOn, "Custom scale", false));
+ 
+     for (int i = 0; i < 12; ++i)
+@@ -172,12 +173,8 @@ void HardTuneProcessor::syncEngineFromParameters()
+     const int scaleIndex = (int) raw (kScale);
+ 
+     tune::TuneCore::Params p;
+-    //  v0.8.1 (TEST) : le commutateur PITCH CORRECTION est retire. Il ne coupait
+-    //  que l'accord et laissait le vibrato et le humanize actifs, si bien que sur
+-    //  OFF le plugin continuait de modifier la voix (mesure : 48 cents de vibrato
+-    //  ajoute). L'accord est desormais toujours applique, a hauteur du reglage
+-    //  AMOUNT.
+-    p.amount       = raw (kAmount, 100.0f) * 0.01f;
++    const bool corrOn = raw (kCorrection, 1.0f) > 0.5f;
++    p.amount       = corrOn ? raw (kAmount, 100.0f) * 0.01f : 0.0f;
+     p.retuneMs     = raw (kRetune);
+     p.formant      = raw (kFormant) * 0.01f;
+     p.humanize     = raw (kHumanize, 32.0f) * 0.01f;
+diff --git a/Source/PluginProcessor.h b/Source/PluginProcessor.h
+index 8d85ddd..a1c7da6 100644
+--- a/Source/PluginProcessor.h
++++ b/Source/PluginProcessor.h
+@@ -52,6 +52,7 @@ public:
+     static constexpr const char* kVibrato  = "vibrato";
+     static constexpr const char* kVibRate  = "vibratoRate";
+     static constexpr const char* kDarkMode = "darkMode";
++    static constexpr const char* kCorrection = "correctionOn";
+     static constexpr const char* kOutput   = "output";
+     static constexpr const char* kTranspose= "transpose";
+     static constexpr const char* kBypass   = "bypass";

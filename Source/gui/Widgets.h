@@ -12,6 +12,7 @@
 #include <cmath>
 
 #include "Theme.h"
+#include "../Diag.h"
 
 namespace ht
 {
@@ -34,8 +35,15 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:knob");
+    try
+    {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
+
+        if (d < 8.0f)      // composant de taille nulle/absurde : rien a dessiner
+            return;
+
         const float sw = juce::jmax (5.0f, d * 0.105f);
         const float R  = d * 0.5f - sw * 0.5f - 1.0f;
         const auto  c  = b.getCentre();
@@ -74,7 +82,12 @@ public:
         g.fillEllipse (face);
         g.setColour (pal.knobEdge);
         g.drawEllipse (face, 1.0f);
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:knob");
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -97,6 +110,9 @@ public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
 
     void paint (juce::Graphics& g) override
+    {
+        ht::diag::stage ("paint:barre");
+    try
     {
         auto b = getLocalBounds().toFloat();
         const float h = 12.0f;
@@ -133,7 +149,12 @@ public:
         g.fillEllipse (knob);
         g.setColour (pal.accentDark);
         g.drawEllipse (knob, 1.6f);
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:barre");
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -154,6 +175,9 @@ public:
     void setCompact (bool c) { compact = c; resized(); }
 
     void paintButton (juce::Graphics& g, bool over, bool) override
+    {
+        ht::diag::stage ("paint:interrupteur");
+    try
     {
         auto b = getLocalBounds().toFloat().reduced (0.5f);
         const float r = b.getHeight() * 0.5f;
@@ -190,7 +214,12 @@ public:
                                  juce::Colour (0xffdde8f0), knob.getRight(), knob.getBottom(), false);
         g.setGradientFill (kg);
         g.fillEllipse (knob);
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:interrupteur");
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -214,7 +243,13 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:clavier");
+    try
+    {
         auto r = getLocalBounds().toFloat();
+        if (r.getWidth() < 12.0f || r.getHeight() < 12.0f)
+            return;
+
         const int n = 12;
         const float w = r.getWidth() / (float) n;
 
@@ -254,7 +289,12 @@ public:
                 g.fillEllipse (keyRect.getCentreX() - 4.6f, keyRect.getBottom() - 22.0f, 9.2f, 9.2f);
             }
         }
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:clavier");
     }
+}
 
     static juce::String nameFor (int i)
     {
@@ -288,23 +328,39 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:cadran");
+    try
+    {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
+
+        if (d < 16.0f)     // taille nulle -> rayon negatif et police de hauteur 0
+            return;
+
         const float sw = d * 0.085f;
         const float R  = d * 0.5f - sw * 0.5f - 16.0f;
         const auto  c  = b.getCentre();
 
-        // anneau pointillé « technique »
-        juce::Path dots;
-        dots.addCentredArc (c.x, c.y, R + sw * 0.5f + 12.0f, R + sw * 0.5f + 12.0f, 0.0f,
-                            juce::degreesToRadians (-120.0f),
-                            juce::degreesToRadians (240.0f), true);
-        juce::PathStrokeType ps (1.4f);
-        juce::Path dashed;
-        const float dashLengths[2] = { 2.0f, 11.0f };
-        ps.createDashedStroke (dashed, dots, dashLengths, 2);
-        g.setColour (pal.accent.withAlpha (0.45f));
-        g.fillPath (dashed);
+        // Anneau pointille « technique » : des petits disques dessines un par un.
+        // Avant, on passait par PathStrokeType::createDashedStroke + fillPath
+        // (code interne de JUCE, appele 30 fois par seconde et alimentait le
+        // remplissage de chemins). Visuellement identique, sans ce detour.
+        {
+            const float rDots = R + sw * 0.5f + 12.0f;
+
+            g.setColour (pal.accent.withAlpha (0.45f));
+
+            for (int k = 0; k < 72; ++k)
+            {
+                if ((k % 4) == 3)
+                    continue;                       // le « tiret » de 11 px : un trou
+
+                const float a = juce::degreesToRadians (-120.0f + 240.0f * (float) k / 71.0f);
+                g.fillEllipse (c.x + std::cos (a) * rDots - 0.9f,
+                               c.y + std::sin (a) * rDots - 0.9f,
+                               1.8f, 1.8f);
+            }
+        }
 
         // ventre
         auto face = juce::Rectangle<float> (R - sw * 0.5f - 3.0f, R - sw * 0.5f - 3.0f);
@@ -364,7 +420,12 @@ public:
         g.drawText (juce::String::fromUTF8 ("\xc2\xa2"),
                     getLocalBounds().withTrimmedTop ((int) (d * 0.30f)),
                     juce::Justification::centredTop, false);
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:cadran");
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -392,7 +453,13 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:oscilloscope");
+    try
+    {
         auto b = getLocalBounds().toFloat();
+        if (b.getWidth() < 8.0f || b.getHeight() < 8.0f)
+            return;
+
         g.setColour (pal.dark ? pal.card2 : juce::Colour (0xfff7fbfe));
         g.fillRoundedRectangle (b, 9.0f);
         g.setColour (pal.cardEdge.withAlpha (0.8f));
@@ -438,7 +505,12 @@ public:
         g.setColour (pal.accentDark);
         g.strokePath (curve, juce::PathStrokeType (2.4f,
                        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:oscilloscope");
     }
+}
 
 private:
     Palette pal = lightPalette();
@@ -463,7 +535,13 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        ht::diag::stage ("paint:vu-metre");
+    try
+    {
         auto b = getLocalBounds();
+        if (b.getWidth() < 24 || b.getHeight() < 24)
+            return;
+
         g.setColour (pal.inkSoft);
         g.setFont (font (11.0f, true));
         g.drawText (title.toUpperCase(), b.removeFromTop (16), juce::Justification::centred, false);
@@ -493,7 +571,12 @@ public:
         auto f = getLocalBounds().removeFromBottom (14);
         g.drawText ("PEAK", f.getX() + 22, f.getY(), 40, 14, juce::Justification::centredLeft, false);
         g.drawText ("RMS",  f.getX() + 22 + barW + gap, f.getY(), 40, 14, juce::Justification::centredLeft, false);
+        }
+    catch (...)
+    {
+        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:vu-metre");
     }
+}
 
 private:
     void drawBar (juce::Graphics& g, juce::Rectangle<int> r, float db)

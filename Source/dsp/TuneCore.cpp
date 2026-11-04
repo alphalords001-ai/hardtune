@@ -1,7 +1,5 @@
-//  TuneCore.cpp
+//  TuneCore.cpp — v0.7.0 (MPM + TD-PSOLA, plus de Rubber Band).
 #include "TuneCore.h"
-
-#include <rubberband/RubberBandStretcher.h>
 
 #include <algorithm>
 #include <cmath>
@@ -12,26 +10,39 @@ namespace tune
 
 namespace
 {
-    constexpr int    kHop = 128;                 // pas d'analyse
-    constexpr double kVoicedThreshold = 0.30;
+    //  Tranche de traitement FIXE. Le détecteur analyse tous les 128
+    //  échantillons et le moteur travaille par tranches de 64 : la décision de
+    //  hauteur tombe donc toujours aux mêmes instants, quelle que soit la taille
+    //  de bloc du DAW. C'est ce qui garantit un résultat identique en 64 et en
+    //  2048 échantillons (test 6).
+    constexpr int    kChunk = 64;
+    constexpr int    kAnalysisHop = 128;
 
-    constexpr double kFormantRangeCents = 500.0; // FORMANT ±100 % -> ±500 cents
+    //  Seuil de bruit : sous -55 dBFS, on considère qu'il n'y a rien à accorder.
+    //  Évite d'accorder le souffle de la salle sur scène.
+    constexpr double kGateDb = -55.0;
 
-    // Plage de transposition confiée à Rubber Band
-    constexpr double kRatioMin = 0.5;
-    constexpr double kRatioMax = 2.0;
+    //  Clarté minimale du détecteur pour décider « voisé ».
+    constexpr double kVoicedClarity = 0.45;
 
-    constexpr int kOptions =
-          (int) RubberBand::RubberBandStretcher::OptionProcessRealTime
-        | (int) RubberBand::RubberBandStretcher::OptionEngineFiner      // moteur R3
-        | (int) RubberBand::RubberBandStretcher::OptionWindowShort      // latence minimale
-        | (int) RubberBand::RubberBandStretcher::OptionPitchHighQuality
-        | (int) RubberBand::RubberBandStretcher::OptionFormantPreserved
-        | (int) RubberBand::RubberBandStretcher::OptionSmoothingOn
-        // Canaux traites ENSEMBLE : sans cette option, Rubber Band elargit
-        // artificiellement l'image stereo et casse la compatibilite mono
-        // (c'est exactement le defaut signale : « le mono devient stereo »).
-        | (int) RubberBand::RubberBandStretcher::OptionChannelsTogether;
+    //  Demande maximale au moteur (±600 cents). Au-delà, on est sur une erreur
+    //  de détection, pas sur un chanteur faux.
+    constexpr double kMaxDemandCents = 600.0;
+
+
+    //  Hystérésis de la note visée (en demi-tons) : évite que la voix bascule
+    //  d'une note à l'autre sur un vibrato large.
+    constexpr double kStickyDrop = 0.80;
+    constexpr double kStickyBias = 0.08;
+
+    //  GARDE DE CONTINUITÉ. Un saut de plus de 120 cents d'une analyse à la
+    //  suivante (2,7 ms) n'est pas un chanteur : c'est le détecteur qui hésite
+    //  entre deux décalages (typiquement sur une voyelle très résonante ou
+    //  près d'une consonne). On exige donc DEUX analyses concordantes avant
+    //  d'accepter un tel saut. Coût : 5 ms de retard sur un vrai changement de
+    //  note ; bénéfice : plus aucune bascule de note parasite en live.
+    constexpr double kJumpCents     = 120.0;
+    constexpr double kConfirmCents  = 60.0;
 }
 
 // ============================================================================
@@ -40,14 +51,12 @@ double TuneCore::linToDb (double x) noexcept
     return 20.0 * std::log10 (std::max (1.0e-5, std::abs (x)));
 }
 
-// derive aléatoire lente, bornée à -1..+1 (marche filtrée)
+// dérive aléatoire lente, bornée à -1..+1 (marche filtrée)
 double TuneCore::humanizeCents()
 {
-    // Une nouvelle cible toutes les ~200 ms : la voix derive lentement au lieu
-    // de trembler. C'est exactement le comportement d'un chanteur humain.
     if (--humanizeTicks <= 0)
     {
-        humanizeTicks = std::max (1, (int) std::lround (0.200 * sr / (double) kHop));
+        humanizeTicks = std::max (1, (int) std::lround (0.200 * sr / (double) kAnalysisHop));
         rngState = rngState * 1664525u + 1013904223u;
         humanizeTarget = ((double) (rngState >> 8) / 16777216.0) * 2.0 - 1.0;
     }
@@ -62,65 +71,65 @@ TuneCore::~TuneCore() = default;
 
 void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
 {
-    sr        = sampleRate;
-    maxBlock  = std::max (32, maximumBlockSize);
+    ready = false;
+
+    sr          = (sampleRate > 0.0 ? sampleRate : 48000.0);
+    maxBlock    = std::max (32, maximumBlockSize);
     numChannels = std::max (1, std::min (2, channels));
 
-    stretcher = std::make_unique<RubberBand::RubberBandStretcher> (
-        (size_t) std::lround (sr),
-        (size_t) numChannels,
-        kOptions,
-        1.0,        // time ratio (aucun changement de durée)
-        1.0);       // pitch scale
+    //  Plage imposée en live : 70 Hz (basse) à 1000 Hz (soprano). En dessous de
+    //  70 Hz on ne trouve que des bruits de manipulation, au-dessus de 1000 Hz
+    //  des harmoniques — les deux produisaient de fausses notes sur scène.
+    detector.setRange (70.0, 1000.0);
+    detector.prepare (sr, 1024, kAnalysisHop);
 
-    stretcher->setMaxProcessSize ((size_t) maxBlock);
-    stretcher->setTimeRatio (1.0);
-    stretcher->setPitchScale (1.0);
-    stretcher->setFormantScale (1.0);
+    engine.prepare (sr, maxBlock, numChannels);
 
-    latency = (int) stretcher->getLatency();
-
-    detector.setRange (80.0, 1200.0);
-    detector.prepare (sr, 1024, kHop);
-
-    // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
-    int size = 1;
-    while (size < latency + maxBlock + 64) size <<= 1;
-    dryMask = size - 1;
-    dryDelay.assign ((size_t) size * (size_t) numChannels, 0.0f);
-
-    tmpWet.assign ((size_t) maxBlock * 2 + 2, 0.0f);
-
-    frames.clear();
-    frames.reserve (512);
-    estimates.reserve (64);
+    //  PLUS DE RETARD DE COMMANDE (v0.8.0).
+    //
+    //  La v0.7.0 devait différer la commande de 448 échantillons (10 ms) pour
+    //  compenser son propre moteur : la latence de 26 ms dépassait la
+    //  demi-fenêtre d'analyse de 29,4 ms, si bien que la correction appliquée
+    //  décrivait un son plus ancien que celui qu'on fabriquait.
+    //
+    //  Ici la fenêtre d'analyse est dimensionnée sur la période suivie (≈ 2,2
+    //  périodes, soit 5 à 20 ms). Sa demi-fenêtre est donc du même ordre que la
+    //  latence du moteur (2,7 ms) : l'écart restant vaut quelques millisecondes
+    //  et va dans le bon sens (l'analyse décrit un son plus ancien que le point
+    //  de lecture, donc la commande arrive après coup). Il n'y a plus rien à
+    //  différer, et l'anneau de commande disparaît avec.
+    detector.setAnalysisWindow (0);     // fenêtre maximale tant qu'on n'entend rien
 
     reset();
+    ready = true;
 }
 
 void TuneCore::reset()
 {
-    if (stretcher != nullptr)
-        stretcher->reset();
-
-    std::fill (dryDelay.begin(), dryDelay.end(), 0.0f);
-    writePos = 0;
-    totalIn  = 0;
-
     detector.reset();
-    frames.clear();
-    estimates.clear();
+    engine.reset();
 
-    stickyValid   = false;
-    stickyNote    = 60;
-    smoothedRatio = 1.0;
-    lastGoodPeriod = 0.0;
+    voicedNow = false;
 
-    humanizeWalk = 0.0;
+    stickyValid = false;
+    stickyNote  = 60;
+    lastTarget  = -1;
+    lastHz      = 0.0;
+    candHz      = 0.0;
+    candCount   = 0;
+    ratioTarget = 1.0;
+    ratioSm     = 1.0;
+    logHzSm     = std::log (220.0);
+    corrCentsSm = 0.0;
+    periodSm    = sr / 220.0;
+    mixTarget   = 0.0;
+    holdSamples = 0;
+
+    humanizeTicks  = 1;
+    humanizeWalk   = 0.0;
     humanizeTarget = 0.0;
-    humanizeTicks = 0;
-    vibratoPhase = 0.0;
-    rngState = 0x12345678u;
+    vibratoPhase   = 0.0;
+    rngState       = 0x12345678u;
 
     inPeakLin = inRmsLin = outPeakLin = outRmsLin = 0.0;
     uiInPeak.store (-100.0f);
@@ -137,24 +146,75 @@ void TuneCore::reset()
 }
 
 // ============================================================================
-//  Quantification
+//  Décision de hauteur
 // ============================================================================
-void TuneCore::pushFrame (long long pos, double hz, double conf)
+void TuneCore::updateDecision (const PitchDetector::Estimate& e)
 {
-    Frame f;
-    f.pos    = pos;
-    f.hz     = hz;
-    f.voiced = (hz > 0.0 && conf > kVoicedThreshold);
+    if (! e.valid)
+        return;
 
-    if (! f.voiced)
+    const int    hop     = std::max (1, detector.getHopSize());
+    const double hopSec  = (double) hop / sr;
+
+    const double levelDb = linToDb (std::max (e.rms, 1.0e-7));
+    const bool   aboveGate = levelDb > kGateDb;
+
+    bool voiced = e.voiced && aboveGate && e.confidence >= kVoicedClarity;
+
+    //  MAINTIEN APRÈS CONSONNE : une plosive coupe la périodicité pendant 10 à
+    //  30 ms. Sans maintien, la correction se couperait au milieu de chaque
+    //  syllabe (« voix qui hoquette »). On garde donc la correction pendant
+    //  `sibilantMs` après la dernière trame voisée.
+    if (voiced)
     {
-        // Silence / consonne : on relâche la correction (ratio -> 1, transparent)
-        smoothedRatio += (1.0 - smoothedRatio) * 0.25;
-        f.ratio  = smoothedRatio;
-        f.target = -1;
+        holdSamples = (int) std::lround ((double) params.sibilantMs * 0.001 * sr);
     }
-    else
+    else if (holdSamples > 0)
     {
+        holdSamples -= hop;
+        if (holdSamples > 0)
+            voiced = true;
+    }
+
+    if (voiced && e.hz > 0.0)
+    {
+        // ---- garde de continuité --------------------------------------------
+        double hz = e.hz;
+
+        if (lastHz > 0.0)
+        {
+            const double jump = std::abs (ratioToCents (hz / lastHz));
+
+            if (jump > kJumpCents)
+            {
+                if (candCount > 0 && std::abs (ratioToCents (hz / candHz)) < kConfirmCents)
+                    ++candCount;
+                else
+                {
+                    candHz    = hz;
+                    candCount = 1;
+                }
+
+                if (candCount < 2)
+                    hz = lastHz;              // on garde la note tenue
+                else
+                {
+                    lastHz    = hz;
+                    candCount = 0;
+                }
+            }
+            else
+            {
+                lastHz    = hz;
+                candCount = 0;
+            }
+        }
+        else
+        {
+            lastHz = hz;
+        }
+
+        // ---- note visée ------------------------------------------------------
         const double midiF = hzToMidi (hz);
         const int    cand  = mapper.nearestNote (midiF);
 
@@ -168,55 +228,143 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
             const double dCand   = std::abs (midiF - (double) cand);
             const double dSticky = std::abs (midiF - (double) stickyNote);
 
-            if (dSticky > 0.80 || dCand + 0.08 < dSticky)
+            if (dSticky > kStickyDrop || dCand + kStickyBias < dSticky)
                 stickyNote = cand;
         }
 
-        const double targetMidi = (double) (stickyNote + params.transpose);
-        double cents = (targetMidi - midiF) * 100.0 * (double) params.amount;
+        //  v0.8.2 (2/2) — TRANSPOSE N'EST PAS UNE CORRECTION. Il ne doit pas être
+        //  dosé par AMOUNT : mesuré avant, AMOUNT 0 % + TRANSPOSE +2 donnait
+        //  226,00 Hz, soit AUCUNE transposition, et à AMOUNT 50 % une demi-
+        //  transposition (236,24 Hz au lieu de 246,94). Deux réglages
+        //  indépendants dans l'interface, un seul dans le calcul.
+        const double targetMidi = (double) stickyNote;
+        double cents = ((targetMidi - midiF) * (double) params.amount
+                        + (double) params.transpose) * 100.0;
+
+        //  VIBRATO et HUMANIZE sont des effets DEMANDÉS, pas des erreurs de
+        //  justesse : ils ne passent PAS dans le lisseur du retune. Mesuré avant
+        //  correction : vibrato 50 % à 6 Hz donnait 48,4 cents de profondeur à
+        //  retune 0 ms, mais 12,7 à 100 ms et 3,5 à 400 ms. Le retune étouffait
+        //  donc un effet que l'utilisateur avait réglé exprès.
+        double fxCents = 0.0;
 
         // HUMANIZE : petite dérive aléatoire lente (±15 cents max)
         if (params.humanize > 0.0001f)
-            cents += humanizeCents() * (double) params.humanize * 15.0;
+            fxCents += humanizeCents() * (double) params.humanize * 15.0;
 
         // VIBRATO : oscillation ajoutée (±50 cents max)
         if (params.vibrato > 0.0001f)
         {
             const double hz = (double) std::max (0.1f, params.vibratoHz);
-            vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) kHop / sr;
+            vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) hop / sr;
             if (vibratoPhase > 6.283185307179586)
                 vibratoPhase -= 6.283185307179586;
-            cents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
+            fxCents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
         }
 
-        const double target = std::min (kRatioMax, std::max (kRatioMin, centsToRatio (cents)));
+        cents = std::min (kMaxDemandCents, std::max (-kMaxDemandCents, cents));
 
-        double alpha = 0.0;
-        if (params.retuneMs > 0.5f)
-        {
-            const double tau = (double) params.retuneMs * 0.001;
-            alpha = std::min (0.9999, std::max (0.0, std::exp (-(double) kHop / (tau * sr))));
-        }
+        // ---- lissage exponentiel (LERP) --------------------------------------
+        //  On lisse la HAUTEUR DE SORTIE (en logarithme, donc en cents), et non
+        //  le rapport de transposition. C'est une différence de fond :
+        //  si on lisse le rapport, une petite erreur sur la période de référence
+        //  se transforme directement en erreur de justesse sur la sortie
+        //  (mesuré : 11 cents sur voix réelle). En lissant la hauteur visée, la
+        //  sortie vaut exactement cette hauteur, quelle que soit l'estimation de
+        //  période, et le rapport est recalculé à chaque tranche par
+        //  r = hauteurVisée x période / sr.
+        //
+        //  Deux constantes de temps :
+        //   - 6 ms mini pour suivre une dérive continue (vibrato, justesse) ;
+        //   - 21 ms mini AUX CHANGEMENTS DE NOTE : mesure sur voix réelle, c'est
+        //     ce qui fait passer les sauts brusques de 512 à 385 sans dégrader
+        //     la justesse. Au-delà de 21 ms la note ne se pose plus (46 ms ->
+        //     9 cents, 133 ms -> 11 cents).
+        const bool noteChanged = (stickyNote != lastTarget);
 
-        smoothedRatio = alpha * smoothedRatio + (1.0 - alpha) * target;
-        f.ratio  = smoothedRatio;
-        f.target = (int) std::lround (targetMidi);
+        const double floorMs = noteChanged ? std::max ((double) params.noteRampMs, 0.0) : 0.0;
+        const double tau = std::max ((double) params.retuneMs, std::max (6.0, floorMs)) * 0.001;
+        const double alpha = std::exp (-hopSec / std::max (tau, 1.0e-4));
+
+        //  v0.8.2 — ON LISSE LA CORRECTION, PAS LA HAUTEUR DE SORTIE.
+        //  Lisser la hauteur absolue fait traverser à la sortie toutes les
+        //  fréquences entre deux notes : sur A3 -> B3 avec retune 400 ms, la
+        //  sortie s'arrêtait sur 230 Hz puis 240 Hz, c'est-à-dire A#3, une note
+        //  que le chanteur n'avait pas chantée. En lissant l'ERREUR, la voix
+        //  suit le chanteur immédiatement et seul l'écart est ralenti.
+        //  Pas de saut à l'attaque : un test hors DAW a montré qu'en sautant à la
+        //  correction courante sur la première trame voisée, le retune devenait
+        //  inopérant sur toute note démarrant après un silence (mesuré : 232,0 Hz
+        //  à retune 1000 ms au lieu de la montée lente attendue). L'attaque est
+        //  donc corrigée avec la même constante de temps que le reste.
+        corrCentsSm = alpha * corrCentsSm + (1.0 - alpha) * cents;
+
+        const double totalCents = corrCentsSm + fxCents;
+        const double demandedHz = std::max (30.0, hz * centsToRatio (totalCents));
+        logHzSm = std::log (demandedHz);
+
+        // ---- période réelle du signal (celle des grains, pas la cible) -------
+        const double p = std::min (sr / 70.0, std::max (sr / 1000.0, sr / hz));
+        periodSm += (p - periodSm) * (noteChanged ? 1.0 : 0.7);
+
+        //  Le rapport appliqué EST la correction : il ne dépend plus de periodSm,
+        //  donc une erreur d'estimation de période ne devient plus une erreur de
+        //  hauteur sur la sortie.
+        ratioTarget = centsToRatio (totalCents);
+        ratioSm     = std::min (2.0, std::max (0.5, centsToRatio (totalCents)));
+
+        lastTarget = stickyNote;
+        mixTarget  = 1.0;
+        voicedNow  = true;
+        unvoicedFrames = 0;
+
+        //  FENÊTRE D'ANALYSE ADAPTATIVE.
+        //  Une fenêtre de 2,2 périodes donne un NSDF exploitable (au décalage
+        //  égal à la période, il reste 1,2 période d'intégration) tout en
+        //  ramenant le retard d'analyse à 5-20 ms au lieu de 29,4 ms. C'est ce
+        //  qui permet au mode Live de corriger le son qu'il est en train de
+        //  lire, et non celui d'il y a 30 ms.
+        detector.setAnalysisWindow ((int) std::lround (2.2 * sr / std::max (hz, 1.0)));
+
+        uiHz.store ((float) hz);
+        uiMidi.store ((float) midiF);
+        uiVoiced.store (true);
+        uiTarget.store (stickyNote);
+        uiCents.store ((float) ((midiF - (double) stickyNote) * 100.0));
+    }
+    else
+    {
+        // ---- non voisé : sibilante, plosive, souffle, silence ----------------
+        //  On passe en direct (le moteur est court-circuité) et on relâche la
+        //  correction en 15 ms pour ne pas créer de marche de hauteur.
+        mixTarget = 0.0;
+        voicedNow = false;
+
+        //  Sans hauteur on garde la dernière fenêtre (une note qui reprend est
+        //  ainsi détectée tout de suite), mais si le silence dure on revient à
+        //  la fenêtre maximale : sinon une voix grave qui démarre après un
+        //  passage aigu ne serait jamais trouvée (la fenêtre courte ne contient
+        //  pas assez d'échantillons pour un décalage de 70 Hz).
+        if (++unvoicedFrames > 20)
+            detector.setAnalysisWindow (0);
+        else if (lastHz > 0.0)
+            detector.setAnalysisWindow ((int) std::lround (2.2 * sr / lastHz));
+
+        const double alpha = std::exp (-hopSec / 0.015);
+        corrCentsSm = alpha * corrCentsSm;
+        logHzSm = std::log (sr / periodSm);
+        ratioSm = std::min (2.0, std::max (0.5, centsToRatio (corrCentsSm)));
+        ratioTarget = 1.0;
+
+        holdSamples = std::max (0, holdSamples - hop);
+
+        uiHz.store (0.0f);
+        uiVoiced.store (false);
+        uiTarget.store (-1);
+        uiCents.store (0.0f);
     }
 
-    frames.push_back (f);
-    if (frames.size() > 600)
-        frames.erase (frames.begin(), frames.begin() + 200);
-}
-
-double TuneCore::currentRatio() const
-{
-    return std::min (kRatioMax, std::max (kRatioMin, smoothedRatio));
-}
-
-double TuneCore::formantRatio() const
-{
-    return std::min (2.0, std::max (0.5,
-             centsToRatio ((double) params.formant * kFormantRangeCents)));
+    uiRatio.store ((float) ratioSm);
 }
 
 // ============================================================================
@@ -224,139 +372,94 @@ double TuneCore::formantRatio() const
 // ============================================================================
 void TuneCore::process (const float* const* in, float* const* out, int numSamples, int channels)
 {
-    if (numSamples <= 0 || stretcher == nullptr)
+    if (numSamples <= 0 || ! ready || in == nullptr || out == nullptr)
         return;
 
-    channels = std::max (1, std::min (2, channels));
+    if (in[0] == nullptr || out[0] == nullptr)
+        return;
 
-    // ---- 1. chemin sec : on retarde l'entrée de la latence du stretcher -----
-    for (int c = 0; c < channels; ++c)
+    //  Un seul moteur pour tous les canaux : gauche et droite reçoivent
+    //  exactement la même correction, un signal mono reste donc parfaitement
+    //  mono. Si l'hôte envoie plus de canaux que prepare() n'en a vus, on borne
+    //  et on duplique (voir LiveEngine::process).
+    const int prepared     = std::max (1, numChannels);
+    const int hostChannels = std::max (1, std::min (2, channels));
+    const int used         = std::min (hostChannels, prepared);
+
+    int done = 0;
+    while (done < numSamples)
     {
-        const float* src = in[c];
-        float* dst = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
-        for (int i = 0; i < numSamples; ++i)
-            dst[(int) ((writePos + i) & dryMask)] = src[i];
+        const int n = std::min (kChunk, numSamples - done);
+
+        // ---- 1. décision de hauteur (tous les 128 échantillons) -------------
+        const PitchDetector::Estimate e = detector.process (in[0] + done, n);
+        updateDecision (e);
+
+        // ---- 2. moteur -------------------------------------------------------
+        //  Plus d'anneau de commande : la latence du moteur (2,7 ms) est plus
+        //  courte que la demi-fenêtre d'analyse, donc la commande courante
+        //  décrit bien le son que le moteur lit. Le réglage FORMANT n'a plus
+        //  d'effet (une ligne à retard déplace les formants avec la hauteur) :
+        //  il est conservé pour ne pas invalider les presets.
+        LiveEngine::Control c;
+        c.ratio  = ratioSm;
+        c.period = periodSm;
+        c.voiced = voicedNow;
+        c.mix    = params.bypass ? 0.0
+                                 : std::min (1.0, std::max (0.0, mixTarget * (double) params.mix));
+
+        const float* ip[2] = { in[0] + done,
+                               used > 1 ? in[1] + done : in[0] + done };
+        float*       op[2] = { out[0] + done,
+                               used > 1 ? out[1] + done : out[0] + done };
+
+        engine.process (ip, op, n, used, c);
+        done += n;
     }
 
-    // ---- 2. détection de hauteur (canal 1) ---------------------------------
-    estimates.clear();
-    detector.process (in[0], numSamples, estimates);
-
-    for (const auto& e : estimates)
-        pushFrame (e.pos, e.hz, e.confidence);
-
-    totalIn += numSamples;
-
-    // ---- 3. mise à jour du moteur ------------------------------------------
-    stretcher->setPitchScale (currentRatio());
-    stretcher->setFormantScale (formantRatio());
-
-    // ---- 4. envoi au stretcher ---------------------------------------------
-    const float* inPtrs[2] = { in[0], channels > 1 ? in[1] : in[0] };
-    stretcher->process (inPtrs, (size_t) numSamples, false);
-
-    // ---- 5. récupération ---------------------------------------------------
-    int produced = 0;
-    while (produced < numSamples)
-    {
-        const int avail = (int) stretcher->available();
-        if (avail <= 0)
-            break;
-
-        const int take = std::min (avail, numSamples - produced);
-
-        float* chans[2];
-        for (int c = 0; c < channels; ++c)
-            chans[c] = tmpWet.data() + (size_t) c * (size_t) maxBlock + (size_t) produced;
-
-        stretcher->retrieve (chans, (size_t) take);
-        produced += take;
-    }
-
-    // amorçage : les premiers `latency` samples n'existent pas encore
-    for (int c = 0; c < channels; ++c)
-        for (int i = produced; i < numSamples; ++i)
-            tmpWet[(size_t) c * (size_t) maxBlock + (size_t) i] = 0.0f;
-
-    // ---- 6. mélange sec / traité + gain ------------------------------------
-    const double m = params.bypass ? 0.0 : (double) params.mix;
+    // ---- 4. gain de sortie ---------------------------------------------------
     const double g = dbToGain ((double) params.outputGainDb);
 
-    for (int c = 0; c < channels; ++c)
-    {
-        const float* dry = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
-        const float* wet = tmpWet.data()  + (size_t) c * (size_t) maxBlock;
+    if (std::abs (g - 1.0) > 1.0e-6)
+        for (int c2 = 0; c2 < used; ++c2)
+            for (int i = 0; i < numSamples; ++i)
+                out[c2][i] = (float) ((double) out[c2][i] * g);
 
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const double d = (double) dry[(int) ((writePos + i - latency) & dryMask)];
-            const double w = (double) wet[i];
-            out[c][i] = (float) ((d + (w - d) * m) * g);
-        }
-    }
+    // canaux non traités : duplication du dernier canal (pas de silence)
+    for (int c2 = used; c2 < hostChannels; ++c2)
+        std::memcpy (out[c2], out[used - 1], sizeof (float) * (size_t) numSamples);
 
-    writePos += numSamples;
-
-    // ---- 6 bis. vu-mètres entrée / sortie ----------------------------------
+    // ---- 5. vu-mètres entrée / sortie ---------------------------------------
     {
         double inPk = 0.0, inSq = 0.0, outPk = 0.0, outSq = 0.0;
 
-        for (int c = 0; c < channels; ++c)
-        {
-            const float* src = in[c];
+        for (int c2 = 0; c2 < used; ++c2)
             for (int i = 0; i < numSamples; ++i)
             {
-                const double x = (double) src[i];
+                const double x = (double) in[c2][i];
                 inPk = std::max (inPk, std::abs (x));
                 inSq += x * x;
 
-                const double y = (double) out[c][i];
+                const double y = (double) out[c2][i];
                 outPk = std::max (outPk, std::abs (y));
                 outSq += y * y;
             }
-        }
 
-        const double n = (double) std::max (1, numSamples * channels);
+        const double n = (double) std::max (1, numSamples * used);
         const double inRmsNow  = std::sqrt (inSq  / n);
         const double outRmsNow = std::sqrt (outSq / n);
 
         // attaque immédiate, relâchement doux (~300 ms)
         const double rel = std::exp (-(double) numSamples / (0.30 * sr));
-        inPeakLin  = std::max (inPk,      inPeakLin  * rel);
-        outPeakLin = std::max (outPk,     outPeakLin * rel);
-        inRmsLin   = std::max (inRmsNow,  inRmsLin   * rel);
-        outRmsLin  = std::max (outRmsNow, outRmsLin  * rel);
+        inPeakLin  = std::max (inPk,     inPeakLin  * rel);
+        outPeakLin = std::max (outPk,    outPeakLin * rel);
+        inRmsLin   = std::max (inRmsNow, inRmsLin   * rel);
+        outRmsLin  = std::max (outRmsNow, outRmsLin * rel);
 
         uiInPeak.store  ((float) linToDb (inPeakLin));
         uiInRms.store   ((float) linToDb (inRmsLin));
         uiOutPeak.store ((float) linToDb (outPeakLin));
         uiOutRms.store  ((float) linToDb (outRmsLin));
-    }
-
-    // ---- 7. informations pour l'interface ----------------------------------
-    if (! frames.empty())
-    {
-        const Frame& f = frames.back();
-        if (f.voiced && f.hz > 0.0)
-        {
-            const double midiF = hzToMidi (f.hz);
-            uiHz.store ((float) f.hz);
-            uiMidi.store ((float) midiF);
-            uiVoiced.store (true);
-            uiTarget.store (f.target);
-            if (f.target >= 0)
-                uiCents.store ((float) ((midiF - (double) f.target) * 100.0));
-            else
-                uiCents.store (0.0f);
-        }
-        else
-        {
-            uiHz.store (0.0f);
-            uiVoiced.store (false);
-            uiTarget.store (-1);
-            uiCents.store (0.0f);
-        }
-        uiRatio.store ((float) currentRatio());
     }
 }
 

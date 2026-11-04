@@ -1,0 +1,13 @@
+Ecoutes de comparaison — v0.8.2
+
+5-retune400-avant.wav  : la prise avec RETUNE à 400 ms, AVANT la correction du
+                         11/2026. La sortie glisse et se pose sur A#3.
+6-retune400-apres.wav  : la meme prise, meme reglage, APRES la correction.
+                         La voix va droit a la note chantee.
+
+Les deux fichiers sont identiques en niveau et en duree (21,46 s, mono 44,1 kHz).
+Pour juger : les poser sur deux pistes dans le DAW, demarrer au meme point, et
+basculer sur les passages ou la voix change de note.
+
+Le jeu complet (7 fichiers, dont la prise brute et les trois moteurs) se trouve
+dans /home/user/audio/ du workspace, et dans ecoutes-v0.8.2.zip.
