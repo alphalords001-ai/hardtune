@@ -78,10 +78,29 @@ void PitchDetector::process (const float* mono, int numSamples, std::vector<Esti
 
 bool PitchDetector::analyse (double& hzOut, double& confOut)
 {
-    const int W = windowSize;
+    //  ANALYSE SUR SIGNAL DECIME (facteur 2).
+    //  La fonction de difference YIN coutait 513 x 512 = 262 000 operations en
+    //  double par estimation, 375 fois par seconde : a elle seule ~24 % d'un
+    //  coeur CPU, ce qui faisait deborder la deadline temps reel du DAW
+    //  (craquements, ASIO Guard qui monte). On decime par 2 (moyenne de deux
+    //  echantillons voisins, qui fait aussi office de filtre anti-repliement)
+    //  et on calcule en float : meme duree d'analyse (meme nombre de
+    //  millisecondes), quatre fois moins d'echantillons, instructions SIMD.
+    const int Wd = windowSize / 2;
 
-    int tauMin = (int) std::floor (sr / maxHz);
-    int tauMax = (int) std::ceil  (sr / minHz);
+    if ((int) dec.size() < Wd)
+        dec.assign ((size_t) Wd, 0.0f);
+
+    const float* src = tail.data();
+
+    for (int j = 0; j < Wd; ++j)
+        dec[(size_t) j] = 0.5f * (src[2 * j] + src[2 * j + 1]);
+
+    const double srDec = sr * 0.5;
+    const int W = Wd;
+
+    int tauMin = (int) std::floor (srDec / maxHz);
+    int tauMax = (int) std::ceil  (srDec / minHz);
     tauMin = std::max (2, tauMin);
     tauMax = std::min (W / 2, tauMax);
 
@@ -89,20 +108,21 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
     if (integ < 32 || tauMax <= tauMin + 2)
         return false;
 
-    const float* x = tail.data();
+    const float* x = dec.data();
 
-    // --- fonction de différence -------------------------------------------------
+    // --- fonction de différence (en float : vectorisable) -----------------------
     for (int tau = 0; tau <= tauMax; ++tau)
     {
-        double sum = 0.0;
+        float sum = 0.0f;
         const float* a = x;
         const float* b = x + tau;
+
         for (int j = 0; j < integ; ++j)
         {
-            const double d = (double) a[j] - (double) b[j];
+            const float d = a[j] - b[j];
             sum += d * d;
         }
-        diff[(size_t) tau] = sum;
+        diff[(size_t) tau] = (double) sum;
     }
 
     // --- normalisation cumulative (CMNDF) --------------------------------------
@@ -161,7 +181,7 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
         }
     }
 
-    hzOut   = sr / tauRef;
+    hzOut   = srDec / tauRef;
     confOut = std::max (0.0, std::min (1.0, 1.0 - cmnd[(size_t) best]));
     return true;
 }

@@ -46,6 +46,11 @@ private:
     double minHz = 60.0, maxHz = 1200.0;
 
     std::vector<float>  tail;      // les `windowSize` derniers samples (le plus récent en dernier)
+
+    //  Version decimee (2x) du signal, pour l'analyse seulement : deux fois
+    //  moins d'echantillons a correler = jusqu'a 8x moins de calcul, sans
+    //  perdre la duree d'analyse (le meme nombre de millisecondes).
+    std::vector<float>  dec;
     std::vector<float>  carry;     // samples pas encore traités par hop
     std::vector<double> diff;      // fonction de différence
     std::vector<double> cmnd;      // fonction normalisée
