@@ -114,12 +114,6 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     makeLabel (flexValue, "40 %", 11.0f, pal.ink);
     flexValue.setJustificationType (Justification::centred);
 
-    addAndMakeVisible (corrCaption);
-    makeCaption (corrCaption, "PITCH CORRECTION", 9.5f);
-    addAndMakeVisible (corrSwitch);
-    addAndMakeVisible (corrState);
-    makeLabel (corrState, "ON", 10.5f, pal.accent);
-
     addAndMakeVisible (vibCaption);
     makeCaption (vibCaption, "VIBRATO", 9.5f);
     addAndMakeVisible (vibratoKnob);
@@ -191,7 +185,6 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 
     darkAtt   = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kDarkMode,   darkSwitch);
     bypassAtt = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kBypass,     bypassSwitch);
-    corrAtt   = std::make_unique<ButtonAtt> (st, HardTuneProcessor::kCorrection, corrSwitch);
 
     keyAtt   = std::make_unique<ComboAtt> (st, HardTuneProcessor::kKey,   keyBox);
     scaleAtt = std::make_unique<ComboAtt> (st, HardTuneProcessor::kScale, scaleBox);
@@ -271,8 +264,8 @@ void HardTuneEditor::applyTheme()
     noteLabel.setColour (Label::textColourId, pal.accentDark);
 
     for (Label* l : { &scopeCaption, &retuneCaption, &humanizeCaption, &flexCaption,
-                      &corrCaption, &vibCaption, &rateCaption, &pitchCaption,
-                      &targetCaption, &formantCaption, &transposeCaption, &corrState })
+                      &vibCaption, &rateCaption, &pitchCaption,
+                      &targetCaption, &formantCaption, &transposeCaption })
         l->setColour (Label::textColourId, pal.inkSoft);
 
     for (Label* l : { &humanizeValue, &flexValue, &vibValue, &rateValue,
@@ -294,7 +287,6 @@ void HardTuneEditor::applyTheme()
 
     darkSwitch.setPalette (pal);
     bypassSwitch.setPalette (pal);
-    corrSwitch.setPalette (pal);
     retuneKnob.setPalette (pal);
     humanizeKnob.setPalette (pal);
     flexKnob.setPalette (pal);
@@ -480,10 +472,8 @@ void HardTuneEditor::resized()
     // ---- carte PITCH CORRECTION / VIBRATO / RATE ---------------------------
     {
         auto c = rCorrCard.reduced (10, 9);
-        auto titleRow = c.removeFromTop (24);
-        corrCaption.setBounds (titleRow.removeFromLeft (128));
-        corrState.setBounds (titleRow.removeFromRight (28).withSizeKeepingCentre (28, 12));
-        corrSwitch.setBounds (titleRow.removeFromRight (56).withSizeKeepingCentre (56, 22));
+        //  v0.8.1 (TEST) : plus de commutateur PITCH CORRECTION.
+        (void) c.removeFromTop (24);
 
         c.removeFromTop (6);
         auto knobs = c;
@@ -629,7 +619,4 @@ void HardTuneEditor::refreshFromProcessor()
     const int tr = (int) std::lround (raw (HardTuneProcessor::kTranspose));
     transposeValue.setText (signedInt (tr) + " st", dontSendNotification);
 
-    corrState.setText (corrSwitch.getToggleState() ? "ON" : "OFF", dontSendNotification);
-    corrState.setColour (Label::textColourId,
-                         corrSwitch.getToggleState() ? pal.accent : pal.inkFaint);
 }

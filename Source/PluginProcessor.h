@@ -52,7 +52,6 @@ public:
     static constexpr const char* kVibrato  = "vibrato";
     static constexpr const char* kVibRate  = "vibratoRate";
     static constexpr const char* kDarkMode = "darkMode";
-    static constexpr const char* kCorrection = "correctionOn";
     static constexpr const char* kOutput   = "output";
     static constexpr const char* kTranspose= "transpose";
     static constexpr const char* kBypass   = "bypass";

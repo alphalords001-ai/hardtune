@@ -68,7 +68,6 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
 
     layout.add (std::make_unique<AudioParameterBool> (kBypass, "Bypass", false));
     layout.add (std::make_unique<AudioParameterBool> (kDarkMode, "Dark mode", false));
-    layout.add (std::make_unique<AudioParameterBool> (kCorrection, "Pitch correction", true));
     layout.add (std::make_unique<AudioParameterBool> (kCustomOn, "Custom scale", false));
 
     for (int i = 0; i < 12; ++i)
@@ -173,8 +172,12 @@ void HardTuneProcessor::syncEngineFromParameters()
     const int scaleIndex = (int) raw (kScale);
 
     tune::TuneCore::Params p;
-    const bool corrOn = raw (kCorrection, 1.0f) > 0.5f;
-    p.amount       = corrOn ? raw (kAmount, 100.0f) * 0.01f : 0.0f;
+    //  v0.8.1 (TEST) : le commutateur PITCH CORRECTION est retire. Il ne coupait
+    //  que l'accord et laissait le vibrato et le humanize actifs, si bien que sur
+    //  OFF le plugin continuait de modifier la voix (mesure : 48 cents de vibrato
+    //  ajoute). L'accord est desormais toujours applique, a hauteur du reglage
+    //  AMOUNT.
+    p.amount       = raw (kAmount, 100.0f) * 0.01f;
     p.retuneMs     = raw (kRetune);
     p.formant      = raw (kFormant) * 0.01f;
     p.humanize     = raw (kHumanize, 32.0f) * 0.01f;

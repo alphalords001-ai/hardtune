@@ -55,8 +55,7 @@ private:
     ht::Knob     retuneKnob;                 // Ø92
     juce::Label  humanizeCaption, humanizeValue, flexCaption, flexValue;
     ht::Knob     humanizeKnob, flexKnob;     // Ø68
-    juce::Label  corrCaption, corrState, vibCaption, vibValue, rateCaption, rateValue;
-    ht::PillSwitch corrSwitch { "correction" };
+    juce::Label  vibCaption, vibValue, rateCaption, rateValue;
     ht::Knob     vibratoKnob, rateKnob;
     ht::LevelMeter meterIn, meterOut;
 
@@ -73,7 +72,7 @@ private:
 
     std::unique_ptr<SliderAtt> retuneAtt, humanizeAtt, flexAtt, vibratoAtt, rateAtt,
                                formantAtt, transposeAtt;
-    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt, corrAtt;
+    std::unique_ptr<ButtonAtt> darkAtt, bypassAtt;
     std::unique_ptr<ComboAtt>  keyAtt, scaleAtt;
 
     // rectangles des cartes (dessinées dans paint)
