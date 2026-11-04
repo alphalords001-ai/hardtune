@@ -59,6 +59,8 @@ target_sources(HardTune PRIVATE
     Source/dsp/TuneCore.h
     Source/dsp/PitchDetector.cpp
     Source/dsp/PitchDetector.h
+    Source/dsp/PsolaEngine.cpp
+    Source/dsp/PsolaEngine.h
     Source/dsp/NoteMapper.h
     Source/dsp/TuneMath.h
     Source/gui/HardTuneLookAndFeel.cpp
