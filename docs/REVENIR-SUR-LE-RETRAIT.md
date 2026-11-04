@@ -67,12 +67,14 @@ git checkout 3e72451        # ou : git checkout v0.8.0-avec-commutateur
 
 ## Le fond du problème, indépendant de ce commutateur
 
-Le vrai couplage est ailleurs, et il existe toujours en v0.8.1 :
+État au **v0.8.2**. Trois couplages existaient ; deux sont corrigés, le
+troisième est un choix assumé.
 
-1. `TRANSPOSE` est multiplié par `AMOUNT` — à AMOUNT 0, il ne fait plus rien.
-2. `VIBRATO` et `HUMANIZE` ne sont pas dosés par `AMOUNT` — ils agissent même à 0 %.
-3. `RETUNE` filtre `VIBRATO` et `HUMANIZE` — vibrato 50 % : 48,4 cents de
-   profondeur à retune 0 ms, mais 3,5 cents à 400 ms.
+| couplage | v0.8.1 | v0.8.2 |
+|---|---|---|
+| `TRANSPOSE` multiplié par `AMOUNT` (à 0 %, il ne faisait rien) | présent | **corrigé** |
+| `RETUNE` qui étouffait `VIBRATO` et `HUMANIZE` (48,4 ¢ → 3,5 ¢) | présent | **corrigé** |
+| `VIBRATO` et `HUMANIZE` non dosés par `AMOUNT` | présent | **assumé** — ce sont des effets, pas des erreurs de justesse |
 
-Tant que ces trois points ne sont pas tranchés, aucune commande de l'interface
-n'a un effet isolé et prévisible.
+`AMOUNT` ne dose donc plus que l'accord. Chaque commande de l'interface a
+maintenant un effet isolé et prévisible.
