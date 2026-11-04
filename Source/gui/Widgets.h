@@ -470,7 +470,8 @@ public:
         g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.75f), frame.getX(), frame.getRight());
         // ligne zéro
         g.setColour (juce::Colour (0xff3f6a7c));
-        g.drawHorizontalLine ((int) mid, frame.getX(), frame.getRight(), 1.1f);
+        //  JUCE 9 : drawHorizontalLine n'accepte plus d'epaisseur.
+        g.drawLine (frame.getX(), mid, frame.getRight(), mid, 1.1f);
 
         // courbe : min/max par colonne
         juce::Path wave, sat;
