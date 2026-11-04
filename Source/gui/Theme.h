@@ -71,29 +71,30 @@ inline Palette lightPalette()
 inline Palette darkPalette()
 {
     Palette p;
-    p.win1        = juce::Colour (0xff13202b);
-    p.win2        = juce::Colour (0xff0a1219);
-    p.card1       = juce::Colour (0xff1a2733);
-    p.card2       = juce::Colour (0xff131e28);
-    p.cardEdge    = juce::Colour (0xff24394a);
-    p.ink         = juce::Colour (0xffdbeaf5);
-    p.inkSoft     = juce::Colour (0xff82a2b8);
-    p.inkFaint    = juce::Colour (0xff54707f);
-    p.accent      = juce::Colour (0xff54b2e8);
-    p.accentDark  = juce::Colour (0xff2f8dc9);
-    p.accentLight = juce::Colour (0xff8fd0f0);
-    p.ringTrack   = juce::Colour (0xff2b4050);
-    p.dialFace1   = juce::Colour (0xff22303c);
-    p.dialFace2   = juce::Colour (0xff111a22);
-    p.knobFace1   = juce::Colour (0xff4a5862);
-    p.knobFace2   = juce::Colour (0xff2b343c);
-    p.knobEdge    = juce::Colour (0xff6f8fa5);
-    p.barTrack    = juce::Colour (0xff26353f);
-    p.barFill1    = juce::Colour (0xff8fd8f8);
-    p.barFill2    = juce::Colour (0xff2f9bd8);
-    p.meterTrack  = juce::Colour (0xff22303c);
-    p.glow        = juce::Colour (0xff54b2e8).withAlpha (0.45f);
-    p.index       = juce::Colour (0xff6ee0f5);
+    // Dark navy surfaces with a restrained cyan accent, matching the modern UI.
+    p.win1        = juce::Colour (0xff071421);
+    p.win2        = juce::Colour (0xff030a12);
+    p.card1       = juce::Colour (0xff10243a);
+    p.card2       = juce::Colour (0xff08182a);
+    p.cardEdge    = juce::Colour (0xff17608f);
+    p.ink         = juce::Colour (0xffeaf6ff);
+    p.inkSoft     = juce::Colour (0xff9abbd1);
+    p.inkFaint    = juce::Colour (0xff58788f);
+    p.accent      = juce::Colour (0xff00bfff);
+    p.accentDark  = juce::Colour (0xff0878b5);
+    p.accentLight = juce::Colour (0xff55d9ff);
+    p.ringTrack   = juce::Colour (0xff18364d);
+    p.dialFace1   = juce::Colour (0xff122b43);
+    p.dialFace2   = juce::Colour (0xff071522);
+    p.knobFace1   = juce::Colour (0xff18364f);
+    p.knobFace2   = juce::Colour (0xff081725);
+    p.knobEdge    = juce::Colour (0xff28739c);
+    p.barTrack    = juce::Colour (0xff132b3d);
+    p.barFill1    = juce::Colour (0xff36d4ff);
+    p.barFill2    = juce::Colour (0xff0878b5);
+    p.meterTrack  = juce::Colour (0xff142b3b);
+    p.glow        = juce::Colour (0xff00bfff).withAlpha (0.42f);
+    p.index       = juce::Colour (0xff54e2ff);
     p.dark        = true;
     return p;
 }
