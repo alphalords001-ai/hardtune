@@ -42,11 +42,13 @@ public:
         const double range = juce::jmax (1.0e-9, getMaximum() - getMinimum());
         const double frac  = juce::jlimit (0.0, 1.0, (getValue() - getMinimum()) / range);
 
-        // piste 270° : de 135° à 405° (0° = droite, positif vers le bas)
+        //  Angles de la spec : convention "0 = 3 heures, sens horaire".
+        //  addCentredArc de JUCE part de 12 heures -> on AJOUTE 90 degres.
+        //  Sans ca tout l'arc tournait d'un quart de tour (ouverture a droite).
         juce::Path track;
         track.addCentredArc (c.x, c.y, R, R, 0.0f,
-                             juce::degreesToRadians (135.0f),
-                             juce::degreesToRadians (405.0f), true);
+                             juce::degreesToRadians (135.0f + 90.0f),
+                             juce::degreesToRadians (405.0f + 90.0f), true);
         juce::ColourGradient trackGrad (juce::Colour (0xffe7edf1), c.x - R, c.y - R,
                                         juce::Colour (0xff9fabb4), c.x + R, c.y + R, false);
         trackGrad.addColour (0.5, juce::Colour (0xffc3cdd5));
@@ -60,8 +62,8 @@ public:
         {
             juce::Path val;
             val.addCentredArc (c.x, c.y, R, R, 0.0f,
-                               juce::degreesToRadians (135.0f),
-                               juce::degreesToRadians (a1), true);
+                               juce::degreesToRadians (135.0f + 90.0f),
+                               juce::degreesToRadians (a1 + 90.0f), true);
             juce::ColourGradient grad (pal.accentLight, c.x - R, c.y - R,
                                        pal.accentDark,  c.x + R, c.y + R, false);
             g.setGradientFill (grad);
@@ -358,13 +360,17 @@ public:
         const auto c = b.getCentre();
         const float th = d * 0.075f;
         const float R  = d * 0.5f - th * 0.5f - 2.0f;
+        //  Graduations et aiguille en convention "0 = 3 heures" (celle de la
+        //  spec) ; les arcs JUCE partent de midi -> +90 degres.
         const float a0 = juce::degreesToRadians (142.0f);
         const float a1 = juce::degreesToRadians (398.0f);
+        const float j0 = juce::degreesToRadians (142.0f + 90.0f);
+        const float j1 = juce::degreesToRadians (398.0f + 90.0f);
 
         // halo lumineux
         {
             juce::Path halo;
-            halo.addCentredArc (c.x, c.y, R, R, 0.0f, a0, a1, true);
+            halo.addCentredArc (c.x, c.y, R, R, 0.0f, j0, j1, true);
             g.setColour (pal.glow);
             g.strokePath (halo, juce::PathStrokeType (th * 1.9f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
@@ -372,7 +378,7 @@ public:
         // anneau dégradé
         {
             juce::Path ring;
-            ring.addCentredArc (c.x, c.y, R, R, 0.0f, a0, a1, true);
+            ring.addCentredArc (c.x, c.y, R, R, 0.0f, j0, j1, true);
             juce::ColourGradient grad (juce::Colour (0xff8fe6f2), c.x - R, c.y - R,
                                        juce::Colour (0xff14618f), c.x + R, c.y + R, false);
             g.setGradientFill (grad);
@@ -393,7 +399,9 @@ public:
         }
         // aiguille : 0 = droite, positif vers le bas ; ±50 cents -> ±128°
         const float clamped = juce::jlimit (-50.0f, 50.0f, value);
-        const float ang = juce::degreesToRadians (clamped / 50.0f * 128.0f);
+        //  0 cent doit pointer en HAUT (270 degres dans cette convention) ;
+        //  avant, l'aiguille partait vers la droite, couchee.
+        const float ang = juce::degreesToRadians (270.0f + clamped / 50.0f * 128.0f);
         const float L = R - th * 0.95f;
         const float tail = L * 0.22f;
         g.setColour (juce::Colour (0x4015588a));
@@ -525,24 +533,31 @@ public:
         const float ceilY  = frame.getY() + 2.4f;
         const float floorY = frame.getBottom() - 2.4f;
 
+        //  Bande min/max par colonne, comme la premiere version : c'est ce qui
+        //  donne la masse du signal. Un seul point par colonne ne laissait
+        //  qu'un fil, et la forme changeait completement.
         juce::Path curve, sat;
         bool started = false, satStarted = false;
 
         for (int i = 0; i < cols; ++i)
         {
             const float mn = colMin[(size_t) i], mx = colMax[(size_t) i];
-            const float v  = std::abs (mx) >= std::abs (mn) ? mx : mn;
             const float x  = frame.getX() + frame.getWidth() * (i + 0.5f) / cols;
             const bool clipped = mx >= 0.999f || mn <= -0.999f;
-            const float y = clipped ? (mx >= 0.999f ? ceilY : floorY) : (mid - v * amp);
 
-            if (! started) { curve.startNewSubPath (x, y); started = true; }
-            curve.lineTo (x, y);
+            float yTop = mid - mx * amp;
+            float yBot = mid - mn * amp;
+            if (clipped) { yTop = juce::jmin (yTop, ceilY); yBot = juce::jmax (yBot, floorY); }
+
+            if (! started) { curve.startNewSubPath (x, yTop); started = true; }
+            curve.lineTo (x, yTop);
+            curve.lineTo (x, yBot);
 
             if (clipped)
             {
-                if (! satStarted) { sat.startNewSubPath (x, y); satStarted = true; }
-                else sat.lineTo (x, y);
+                const float ys = mx >= 0.999f ? ceilY : floorY;
+                if (! satStarted) { sat.startNewSubPath (x, ys); satStarted = true; }
+                else sat.lineTo (x, ys);
             }
             else satStarted = false;
         }
@@ -559,7 +574,7 @@ public:
         }
 
         g.setColour (curveCol);
-        g.strokePath (curve, juce::PathStrokeType (3.3f, juce::PathStrokeType::curved,
+        g.strokePath (curve, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
 
         g.setColour (frameCol);
