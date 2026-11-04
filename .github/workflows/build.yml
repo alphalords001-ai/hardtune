@@ -10,7 +10,26 @@ jobs:
         run: cmake -B build -A x64
 
       - name: Compiler
-        run: cmake --build build --config Release --parallel
+        shell: pwsh
+        run: |
+          #  Le journal brut n'est pas forcément lisible par l'agent : on
+          #  republie les erreurs du compilateur en annotations, lisibles par
+          #  l'API (/check-runs/.../annotations).
+          $ErrorActionPreference = 'Continue'
+          cmake --build build --config Release --parallel 2>&1 | Tee-Object -FilePath build-msvc.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $hits = @(Get-Content build-msvc.log |
+                      Select-String -Pattern ': error |error C[0-9]{4}|error LNK[0-9]{4}' |
+                      ForEach-Object { $_.Line.Trim() } |
+                      Select-Object -Unique |
+                      Select-Object -First 8)
+            if ($hits.Count -eq 0) {
+              $hits = @(Get-Content build-msvc.log -Tail 12 | ForEach-Object { $_.Trim() })
+            }
+            foreach ($h in $hits) { Write-Host "::error::$h" }
+            exit 1
+          }
 
       # -----------------------------------------------------------------------
       #  Un rapport de crash FL Studio donne : "in module HardTune.vst3
