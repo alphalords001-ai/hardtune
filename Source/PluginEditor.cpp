@@ -30,7 +30,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     //  DAW charge bien le dernier build ou une copie plus ancienne.
     addAndMakeVisible (verLabel);
     verLabel.setText ("v" + juce::String (JucePlugin_VersionString), juce::dontSendNotification);
-    verLabel.setFont (juce::font (13.0f));
+    verLabel.setFont (ht::font (13.0f));
     verLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8fa3ae));
     titleLabel.setFont (ht::font (34.0f, true));
     titleLabel.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
