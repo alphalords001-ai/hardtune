@@ -51,8 +51,8 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 
     // ---- en-tête -----------------------------------------------------------
     addAndMakeVisible (titleLabel);
-    makeLabel (titleLabel, "HARDTUNE", 15.0f, pal.accentDark, true);
-    titleLabel.setFont (ht::font (15.0f, true).withExtraKerningFactor (0.14f));
+    makeLabel (titleLabel, "ALPHA-TUNE", 15.0f, pal.accentDark, true);
+    titleLabel.setFont (ht::font (15.0f, true).withExtraKerningFactor (0.10f));
 
     addAndMakeVisible (keyCaption);
     makeCaption (keyCaption, "KEY", 9.5f);

@@ -77,7 +77,7 @@ jobs:
 
             # Deuxieme avis : llvm-symbolizer (lit le PDB, voit aussi les
             # fonctions internes que le .map ignore)
-            $dll = Get-ChildItem build -Recurse -Filter HardTune.vst3 -ErrorAction SilentlyContinue |
+            $dll = Get-ChildItem build -Recurse -Filter Alpha-Tune.vst3 -ErrorAction SilentlyContinue |
                      Select-Object -First 1
             if ($dll) {
               Write-Host "DLL: $($dll.FullName)"
@@ -116,14 +116,14 @@ jobs:
       - name: Publier
         uses: actions/upload-artifact@v4
         with:
-          name: HardTune-VST3-Windows
+          name: Alpha-Tune-VST3-Windows
           path: build/**/VST3/*.vst3
 
       - name: Publier les symboles (map + pdb)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HardTune-symboles
+          name: Alpha-Tune-symboles
           if-no-files-found: warn
           path: |
             build/**/*.map
