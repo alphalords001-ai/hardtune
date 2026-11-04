@@ -1,14 +1,5 @@
-//  PluginEditor.h — interface paysage (maquette 1408 x 768).
-//
-//  v0.9 : reprise de la maquette v0.6 (grande interface paysage) avec les
-//  corrections de la v0.8.3 :
-//    - FLEX-TUNE est cable sur le parametre `amount` (il etait eteint et
-//      affichait la valeur de HUMANIZE) ;
-//    - le clavier est pilote par tune::NoteMapper::scaleMask() (les 9 gammes),
-//      et la note jouee est surlignee ;
-//    - FORMANT (parametre inerte) est retire de l'interface ;
-//    - LIGHT / DARK entourent l'interrupteur, comme en v0.8.3 ;
-//    - la fenetre est mise a l'echelle au lieu de deborder de l'ecran.
+//  PluginEditor.h — interface paysage 1408x768, fidèle à la maquette validée
+//  contre l'image de référence (élément par élément).
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -21,11 +12,6 @@ class HardTuneEditor : public juce::AudioProcessorEditor,
                        private juce::Timer
 {
 public:
-    //  Taille de la maquette. Toutes les positions de ce fichier sont ecrites
-    //  dans ce repere, puis converties par place().
-    static constexpr int kDesignW = 1408;
-    static constexpr int kDesignH = 768;
-
     explicit HardTuneEditor (HardTuneProcessor&);
     ~HardTuneEditor() override;
 
@@ -34,24 +20,22 @@ public:
 
 private:
     void timerCallback() override;
+    void cycleSize();
     void applyTheme();
     float rawValue (const char* id, float fallback = 0.0f) const;
-    juce::Label& cap (juce::Label&, const juce::String&, int height = 19,
+    void drawCard (juce::Graphics&, juce::Rectangle<int>) const;
+    juce::Label& cap (juce::Label&, const juce::String&, int x, int y, int h = 19,
                       juce::Colour c = juce::Colour (0xff0f1b23));
-
-    //  Place un composant en coordonnees MAQUETTE ; la conversion vers la
-    //  taille reelle de la fenetre se fait ici, et nulle part ailleurs.
-    void place (juce::Component&, int x, int y, int w, int h);
 
     HardTuneProcessor& proc;
     ht::Palette pal;
     bool lastDarkState = false;
-    float uiScale = 1.0f;
 
-    // ---- en-tete (24,18,1360x60) -------------------------------------------
-    juce::Label  titleLabel, keyCap, scaleCap, lightCap, darkCap, bypassCap;
+    // ---- en-tête (24,18,1360x60) -------------------------------------------
+    juce::Label  titleLabel, keyCap, scaleCap, lightCap, bypassCap;
     juce::ComboBox keyBox, scaleBox;
     ht::PillSwitch lightSwitch { "light" }, bypassSwitch { "bypass" };
+    juce::TextButton sizeButton { "size" };   // cycle : petit / normal / grand
 
     // ---- clavier (24,95,1360x150) ------------------------------------------
     ht::KeyStrip keys;
@@ -69,19 +53,19 @@ private:
     juce::Label  corrCap, vibratoCap, vibratoVal, rateCap, rateVal;
     ht::Knob     vibratoKnob, rateKnob;
 
-    // ---- carte du bas (797,500,585x235) : vumetres, cadran, transpose ------
-    juce::Label  inCap, outCap, inPeak, outPeak, transposeCap, transposeVal;
+    // ---- carte du bas (797,500,585x235) : meters, cadran, barres -----------
+    juce::Label  inCap, outCap, inPeak, outPeak, noteCap, formantCap, transposeCap, transposeVal;
     ht::LevelMeter meterIn, meterOut;
     ht::Gauge    gauge;
-    ht::BarControl transposeBar;
+    ht::BarControl formantBar, transposeBar;
 
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     std::unique_ptr<SliderAtt> retuneAtt, humanizeAtt, flexAtt, vibratoAtt, rateAtt,
-                               transposeAtt;
-    std::unique_ptr<ButtonAtt> lightAtt, bypassAtt;
+                               formantAtt, transposeAtt;
+    std::unique_ptr<ButtonAtt> bypassAtt;
     std::unique_ptr<ComboAtt>  keyAtt, scaleAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HardTuneEditor)

@@ -269,12 +269,12 @@ public:
             {
                 const int i = oct * 7 + blackAfter[k];
                 if (i + 1 >= nWhite) continue;
-                // v0.9 : classe de hauteur ABSOLUE, comme les blanches et comme
-                // tune::NoteMapper::scaleMask(). Avant, on ajoutait `key` ici et pas
-                // sur les blanches : les deux moities du clavier se contredisaient.
-                const int pc = (whitePC (blackAfter[k]) + 1) % 12;
+                const int pc = (whitePC (blackAfter[k]) + 1) % 12; // classe absolue de la noire
                 const float x = r.getX() + (i + 1) * w - blackW * 0.5f;
                 const bool hot = inScale (pc);
+                //  `pc` est une classe ABSOLUE (voir inScale) : la note jouee doit
+                //  l'etre aussi. Le decalage par `key` ne laissait surligner que
+                //  la tonalite de do.
                 const bool isPlaying = playing && target >= 0 && (target % 12) == pc;
                 juce::Rectangle<float> kr (x, r.getY(), blackW, blackH);
                 if (hot || isPlaying)
@@ -304,9 +304,7 @@ public:
 
 private:
     static int whitePC (int i) { static const int p[7] = {0,2,4,5,7,9,11}; return p[i % 7]; }
-    //  Le masque vient de tune::NoteMapper::scaleMask() : bit n = classe de
-    //  hauteur n (0 = do). Il ne doit donc PAS etre decale par la tonalite.
-    bool inScale (int pc) const { return ((mask >> (((pc % 12) + 12) % 12)) & 1u) != 0u; }
+    bool inScale (int pc) const { return ((mask >> (((pc % 12) + 12) % 12)) & 1u) != 0u; } // masque absolu
 
     int key = 0;
     unsigned mask = 0xfffu;
@@ -470,8 +468,7 @@ public:
         g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.75f), frame.getX(), frame.getRight());
         // ligne zéro
         g.setColour (juce::Colour (0xff3f6a7c));
-        //  JUCE 9 : drawHorizontalLine n'accepte plus d'epaisseur.
-        g.drawLine (frame.getX(), mid, frame.getRight(), mid, 1.1f);
+        g.drawHorizontalLine ((int) mid, frame.getX(), frame.getRight(), 1.1f);
 
         // courbe : min/max par colonne
         juce::Path wave, sat;
