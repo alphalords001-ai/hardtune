@@ -83,6 +83,7 @@ private:
     struct Frame
     {
         long long pos = 0;
+        long long time = 0;      // instant (en echantillons d'entree) ou la trame est creee
         double hz = 0.0;
         bool   voiced = false;
         double ratio = 1.0;
@@ -91,6 +92,8 @@ private:
 
     void   pushFrame (long long pos, double hz, double conf);
     double currentRatio() const;
+    /** Rapport a appliquer MAINTENANT : celui de la trame creee il y a `controlDelay` echantillons. */
+    double delayedRatio (long long now) const;
     double formantRatio() const;
 
     /** Traite une tranche de maxBlock samples au maximum (offset dans le bloc hôte). */
@@ -107,6 +110,8 @@ private:
     // --- synthèse -----------------------------------------------------------
     std::unique_ptr<RubberBand::RubberBandStretcher> stretcher;
     int latency = 0;
+    long long serveStart = 0;        // instant (en echantillons) ou la FIFO commence a etre servie
+    int controlDelay = 0;            // retard de la commande de hauteur (voir delayedRatio)
 
     std::vector<float> tmpWet;        // sortie brute du stretcher (maxBlock * canaux)
 

@@ -13,6 +13,20 @@ namespace tune
 namespace
 {
     constexpr int    kHop = 128;                 // pas d'analyse
+
+    // Marge de la FIFO de sortie : Rubber Band livre ses echantillons par a-coups
+    // (1 a 8 de moins que prevu pendant plusieurs blocs de suite). Sans marge, le
+    // manque etait comble par des zeros : un trou = un clic en fin de bloc.
+    constexpr int    kFifoMargin = 128;
+
+    // Ecart constant entre l'arrivee de la premiere sortie et l'alignement reel
+    // du signal (mesure par correlation, voir tests)
+    constexpr int    kAlignOffset = 0;
+
+    // Retard interne de Rubber Band (R2, PitchHighConsistency) entre l'entree et
+    // le son qu'il fabrique a l'instant present ; constant en echantillons.
+    constexpr int    kStretcherDelay = 2080;
+
     constexpr double kVoicedThreshold = 0.30;
 
     constexpr double kFormantRangeCents = 500.0; // FORMANT ±100 % -> ±500 cents
@@ -115,8 +129,38 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
         //  2080 echantillons, et cette valeur est CONSTANTE en echantillons :
         //  mesuree identique a 44100 et a 48000 Hz (chirp, correlation 1.0000).
         //  Le surplus au-dela de getStartDelay() vaut donc 800 echantillons.
-        const double surplusReel = 800.0;
-        const int newLatency = (int) newStretcher->getStartDelay() + (int) std::lround (surplusReel);
+        //  Mesure EXACTE de l'instant d'arrivee de la premiere sortie : on nourrit
+        //  le stretcher de silence, par pas de kHop comme en fonctionnement
+        //  reel, jusqu'a ce qu'il rende quelque chose. Cela remplace le chiffre
+        //  « 800 » mesure a la main, et surtout rend le retard independant de la
+        //  taille de bloc de l'hote.
+        int arrival = 0;
+        {
+            // Un faible bruit et non du silence pur : Rubber Band traite le silence
+            // a part (sortie plus tardive), ce qui surestimait le retard de 500
+            // echantillons par rapport a une vraie voix.
+            std::vector<float> probe ((size_t) kHop, 0.0f);
+            unsigned int seed = 0x9e3779b9u;
+            for (auto& s : probe)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                s = 0.05f * ((float) (seed >> 8) / 8388608.0f - 1.0f);
+            }
+            const float* zp[2] = { probe.data(), probe.data() };
+
+            while (arrival < 16 * 4096 && (int) newStretcher->available() <= 0)
+            {
+                newStretcher->process (zp, (size_t) kHop, false);
+                arrival += kHop;
+            }
+
+            // on jette ce qui est sorti et on repart d'un stretcher propre
+            newStretcher->reset();
+            newStretcher->setPitchScale (1.0);
+            newStretcher->setFormantScale (1.0);
+        }
+
+        const int newLatency = arrival + kFifoMargin + kAlignOffset;
 
         // Plancher 100 Hz (G2) : la fenetre reste a 1024 echantillons (21 ms).
         // A 80 Hz elle montait a 1500 echantillons (31 ms), et le retard de
@@ -140,6 +184,13 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
         // --- publication (aucune allocation apres ce point) -----------------
         stretcher = std::move (newStretcher);
         latency   = newLatency;
+        serveStart = (long long) arrival + kFifoMargin;
+        // Retard de la commande de hauteur (voir delayedRatio) : retard INTERNE du
+        // stretcher (kStretcherDelay) moins la demi-fenetre d'analyse. Mesure par
+        // balayage hors DAW : l'ecart-type du vibrato residuel est minimal
+        // (1,3 cent) pour 1500..1700 et remonte de part et d'autre (14,8 cents
+        // sans retard, 8,6 cents a 2500).
+        controlDelay = std::max (0, kStretcherDelay - detector.getWindowSize() / 2);
         dryMask   = size - 1;
         dryDelay  = std::move (newDry);
         tmpWet    = std::move (newWet);
@@ -281,6 +332,26 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
         frames.erase (frames.begin(), frames.begin() + 200);
 }
 
+// Le stretcher fabrique, a l'instant t, le son qui est entre dans le plugin il
+// y a `latence propre du stretcher` echantillons (~43 ms). Or la hauteur
+// mesuree a l'instant t decrit le son de t - (demi-fenetre d'analyse). Si on
+// appliquait la mesure du moment, on corrigerait le son d'il y a 43 ms avec la
+// hauteur d'aujourd'hui : sur un vibrato de 5,5 Hz (periode 180 ms) cela
+// revient a corriger a contre-temps, donc a ne PAS le corriger du tout (mesure :
+// ecart-type 14,8 cents avant et apres, soit zero effet). On applique donc la
+// commande creee `controlDelay` echantillons plus tot, celle qui decrit
+// exactement le son que le stretcher est en train de produire.
+double TuneCore::delayedRatio (long long now) const
+{
+    const long long wanted = now - (long long) controlDelay;
+
+    for (size_t i = frames.size(); i-- > 0;)
+        if (frames[i].time <= wanted)
+            return std::min (kRatioMax, std::max (kRatioMin, frames[i].ratio));
+
+    return 1.0;      // pas encore de commande assez ancienne : transparent
+}
+
 double TuneCore::currentRatio() const
 {
     return std::min (kRatioMax, std::max (kRatioMin, smoothedRatio));
@@ -372,10 +443,13 @@ void TuneCore::processChunk (const float* const* in, float* const* out, int offs
         detector.process (in[0] + offset + consumed, n, estimates);
 
         for (const auto& e : estimates)
+        {
             pushFrame (e.pos + consumed, e.hz, e.confidence);
+            frames.back().time = writePos + consumed + n;
+        }
 
         // ---- mise a jour du moteur -----------------------------------------
-        stretcher->setPitchScale (currentRatio());
+        stretcher->setPitchScale (delayedRatio (writePos + consumed + n));
         stretcher->setFormantScale (formantRatio());
 
         // ---- envoi au stretcher --------------------------------------------
@@ -412,16 +486,23 @@ void TuneCore::processChunk (const float* const* in, float* const* out, int offs
     }
 
     // ---- le bloc sort de la FIFO (zeros uniquement pendant l'amorcage) ------
-    const int have = std::min (numSamples, fifoFill);
+    //  On ne sert la FIFO qu'a partir de `serveStart` (arrivee de la premiere
+    //  sortie + marge) : la marge reste donc en reserve et absorbe les livraisons
+    //  par a-coups au lieu de laisser un trou dans le signal.
+    const int zerosFirst = (int) std::max<long long> (0, std::min<long long> (numSamples, serveStart - writePos));
+    const int have = std::min (numSamples - zerosFirst, fifoFill);
 
     for (int c = 0; c < stretcherCh; ++c)
     {
         float* dst = tmpWet.data() + (size_t) c * (size_t) maxBlock;
         const float* src = wetFifo.data() + (size_t) c * (size_t) fifoSize + (size_t) fifoRead;
 
-        std::copy (src, src + have, dst);
+        for (int i = 0; i < zerosFirst; ++i)
+            dst[i] = 0.0f;
 
-        for (int i = have; i < numSamples; ++i)
+        std::copy (src, src + have, dst + zerosFirst);
+
+        for (int i = zerosFirst + have; i < numSamples; ++i)
             dst[i] = 0.0f;
     }
 
