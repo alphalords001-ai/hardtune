@@ -192,6 +192,7 @@ void HardTuneEditor::applyTheme()
     for (auto* s : { &lightSwitch, &bypassSwitch })
         s->setPalette (pal);
 
+    keys.setPalette (pal);
     scope.setPalette (pal);
     gauge.setPalette (pal);
     meterIn.setPalette (pal);

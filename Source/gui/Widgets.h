@@ -215,6 +215,8 @@ private:
 class KeyStrip : public juce::Component
 {
 public:
+    void setPalette (const Palette& p) { pal = p; repaint(); }
+
     void setScale (int keyIndex, unsigned scaleMask, bool minor)
     {
         key = keyIndex; mask = scaleMask; isMinor = minor;
@@ -326,6 +328,7 @@ private:
     static int whitePC (int i) { static const int p[7] = {0,2,4,5,7,9,11}; return p[i % 7]; }
     bool inScale (int pc) const { return ((mask >> (((pc % 12) + 12) % 12)) & 1u) != 0u; } // masque absolu
 
+    Palette pal = lightPalette();
     int key = 0;
     unsigned mask = 0xfffu;
     bool isMinor = false;
