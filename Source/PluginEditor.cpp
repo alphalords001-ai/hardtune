@@ -161,8 +161,13 @@ HardTuneEditor::~HardTuneEditor() { stopTimer(); }
 
 float HardTuneEditor::rawValue (const char* id, float fb) const
 {
-    if (auto* p = proc.apvts.getParameter (id))
-        return p->getValue() * (p->getMaximum() - p->getMinimum()) + p->getMinimum();
+    //  On lit la valeur BRUTE du parametre (deja denormalisee : 0..400 ms,
+    //  0..100 %, index de gamme...). La formule precedente passait par
+    //  getValue() * (max - min) + min, mais RangedAudioParameter n'expose plus
+    //  getMinimum()/getMaximum() en JUCE 9.
+    if (auto* p = proc.apvts.getRawParameterValue (id))
+        return p->load();
+
     return fb;
 }
 
