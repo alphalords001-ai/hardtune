@@ -15,7 +15,11 @@ inline juce::Font font (float height, bool bold = false)
     // Une hauteur nulle (composant pas encore dimensionné) ferait planter
     // le moteur de texte : on la borne toujours.
     const float h = juce::jlimit (1.0f, 400.0f, height);
-    return juce::Font (juce::FontOptions (h).withStyle (bold ? "Bold" : "Regular"));
+    //  Segoe UI : la seule police presente partout sous Windows, et celle de la
+    //  reference. Sans nom explicite, JUCE prend sa police par defaut, plus
+    //  large, et les libelles debordent de leurs cases.
+    return juce::Font (juce::FontOptions ("Segoe UI", h,
+                                          bold ? juce::Font::bold : juce::Font::plain));
 }
 
 struct Palette

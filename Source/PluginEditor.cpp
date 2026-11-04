@@ -1,4 +1,4 @@
-//  PluginEditor.cpp — interface paysage 1408x768 fidèle à la maquette.
+//  PluginEditor.cpp — ALPHA-TUNE, dessin 1408x768 (SPEC-INTERFACE-v0.6).
 #include "PluginEditor.h"
 
 #include <array>
@@ -8,184 +8,174 @@ namespace
 {
 constexpr int W = 1408, H = 768;
 
+const juce::Colour kInk      (0xff0f1b23);
+const juce::Colour kInkSoft  (0xff33505e);
+const juce::Colour kBlue     (0xff0e527d);   // LIGHT, titre
+const juce::Colour kValue    (0xff0e4d72);   // valeurs (18 px gras)
+
 juce::String fmtMs (float v)  { return juce::String (v, 0) + " ms"; }
 juce::String fmtPct (float v) { return juce::String (v, 0) + "%"; }
 juce::String fmtHz (float v)  { return juce::String (v, 1) + " Hz"; }
 juce::String fmtSt (int v)    { return juce::String (v) + " st"; }
 juce::String fmtDb (float v)  { return juce::String (v, 1) + " dB"; }
+
+/** (x,y) = haut-gauche de la boite de 140 px centree sur x (regle 10). */
+juce::Rectangle<int> box140 (int cx, int y, int h = 22)
+{
+    return { cx - 70, y, 140, h };
+}
 }
 
 HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     : AudioProcessorEditor (&p), proc (p)
 {
-    setSize (W, H);
-
     auto& apvts = proc.apvts;
 
-    // ---- en-tête ------------------------------------------------------------
-    addAndMakeVisible (titleLabel);
-    titleLabel.setText ("ALPHA-TUNE", juce::dontSendNotification);
+    // ---- en-tete -----------------------------------------------------------
+    label (titleLabel, "ALPHA-TUNE", 34.0f, kBlue, true);
 
-    //  Numero de version a l'ecran : sans lui, impossible de savoir si le
-    //  DAW charge bien le dernier build ou une copie plus ancienne.
-    addAndMakeVisible (verLabel);
-    verLabel.setText ("v" + juce::String (JucePlugin_VersionString), juce::dontSendNotification);
-    verLabel.setFont (ht::font (13.0f));
-    verLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8fa3ae));
-    titleLabel.setFont (ht::font (34.0f, true));
-    titleLabel.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
-
-    addAndMakeVisible (keyCap);   keyCap.setText ("KEY", juce::dontSendNotification);
-    addAndMakeVisible (scaleCap); scaleCap.setText ("SCALE", juce::dontSendNotification);
-    for (auto* l : { &keyCap, &scaleCap })
-    {
-        l->setFont (ht::font (19.0f));
-        l->setColour (juce::Label::textColourId, juce::Colour (0xff0f1b23));
-    }
+    label (keyCap,   "KEY",   19.0f, kInk);
+    label (scaleCap, "SCALE", 19.0f, kInk);
 
     addAndMakeVisible (keyBox);
+    keyBox.setLookAndFeel (&pillLnf);
     keyBox.addItemList (apvts.getParameter (HardTuneProcessor::kKey)->getAllValueStrings(), 1);
     keyBox.setSelectedId (1, juce::dontSendNotification);
     keyAtt = std::make_unique<ComboAtt> (apvts, HardTuneProcessor::kKey, keyBox);
 
     addAndMakeVisible (scaleBox);
+    scaleBox.setLookAndFeel (&pillLnf);
     scaleBox.addItemList (apvts.getParameter (HardTuneProcessor::kScale)->getAllValueStrings(), 1);
     scaleBox.setSelectedId (1, juce::dontSendNotification);
     scaleAtt = std::make_unique<ComboAtt> (apvts, HardTuneProcessor::kScale, scaleBox);
 
-    addAndMakeVisible (lightCap);  lightCap.setText ("LIGHT", juce::dontSendNotification);
-    addAndMakeVisible (bypassCap); bypassCap.setText ("BYPASS", juce::dontSendNotification);
-    for (auto* l : { &lightCap, &bypassCap })
-    {
-        l->setFont (ht::font (19.0f));
-        l->setColour (juce::Label::textColourId, juce::Colour (0xff0f1b23));
-    }
-    lightCap.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
+    label (lightCap,  "LIGHT",  19.0f, kBlue);
+    label (bypassCap, "BYPASS", 19.0f, kInk);
 
     addAndMakeVisible (lightSwitch);
-    lightSwitch.setToggleState (true, juce::dontSendNotification); // LIGHT allumé = mode clair
+    lightSwitch.setToggleState (true, juce::dontSendNotification);   // LIGHT allume = clair
     lightSwitch.onClick = [this]
     {
         const bool dark = proc.apvts.getRawParameterValue (HardTuneProcessor::kDarkMode)->load() > 0.5f;
         if (auto* pm = dynamic_cast<juce::AudioParameterBool*> (proc.apvts.getParameter (HardTuneProcessor::kDarkMode)))
-            pm->setValueNotifyingHost (! dark); // LIGHT allumé = PAS de mode sombre
+            pm->setValueNotifyingHost (! dark);
     };
 
     addAndMakeVisible (bypassSwitch);
     bypassAtt = std::make_unique<ButtonAtt> (apvts, HardTuneProcessor::kBypass, bypassSwitch);
 
-    // bouton de recadrage : petit (0.75) / normal (1.0) / grand (1.25)
     addAndMakeVisible (sizeButton);
-    sizeButton.setButtonText (juce::String::fromUTF8 ("\xe2\x9f\xb2")); // ⤢
-    sizeButton.setTooltip ("Taille : petit / normal / grand");
+    sizeButton.setButtonText (juce::String::fromUTF8 ("\xe2\x9f\xb2"));   // ⤢
+    sizeButton.setTooltip ("Size : 0.6 / 1.0 / 1.5");
     sizeButton.onClick = [this] { cycleSize(); };
-    sizeButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffa9ddf5));
-    sizeButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff0e527d));
+    sizeButton.setColour (juce::TextButton::buttonColourId,   juce::Colour (0xffa9ddf5));
+    sizeButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffc4e9fa));
+    sizeButton.setColour (juce::TextButton::textColourOffId,  juce::Colour (0xff0e527d));
+    sizeButton.setColour (juce::TextButton::textColourOnId,   juce::Colour (0xff0e527d));
 
-    // ---- clavier ------------------------------------------------------------
+    // ---- clavier -----------------------------------------------------------
     addAndMakeVisible (keys);
-    addAndMakeVisible (keysCap);
-    keysCap.setText ("KEYBOARD \xc2\xb7 SCALE", juce::dontSendNotification);
-    keysCap.setFont (ht::font (19.0f));
-    keysCap.setColour (juce::Label::textColourId, juce::Colour (0xff0f1b23));
+    label (keysCap, "KEYBOARD " + juce::String::fromUTF8 ("\xc2\xb7") + " SCALE", 19.0f, kInk);
 
-    // ---- waveform -----------------------------------------------------------
-    addAndMakeVisible (waveCap);
-    waveCap.setText ("WAVEFORM \xc2\xb7 PITCH", juce::dontSendNotification);
-    waveCap.setFont (ht::font (19.0f));
-    waveCap.setColour (juce::Label::textColourId, juce::Colour (0xff0f1b23));
+    // ---- waveform ----------------------------------------------------------
+    label (waveCap, "WAVEFORM " + juce::String::fromUTF8 ("\xc2\xb7") + " PITCH", 22.0f, kInk);
     addAndMakeVisible (scope);
 
-    // ---- RETUNE SPEED -------------------------------------------------------
+    // ---- RETUNE SPEED ------------------------------------------------------
     auto setupKnob = [&] (ht::Knob& k, const char* id)
     {
         addAndMakeVisible (k);
-        k.setLookAndFeel (nullptr);
         return std::make_unique<SliderAtt> (apvts, id, k);
     };
-    auto capVal = [&] (juce::Label& c, juce::Label& v, const char* t)
-    {
-        addAndMakeVisible (c); c.setText (t, juce::dontSendNotification);
-        c.setFont (ht::font (15.0f));
-        c.setColour (juce::Label::textColourId, juce::Colour (0xff33505e));
-        addAndMakeVisible (v);
-        v.setFont (ht::font (17.0f, true));
-        v.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
-    };
 
-    cap (retuneCap, "RETUNE SPEED", 817, 279, 22);
+    label (retuneCap, "RETUNE SPEED", 22.0f, kInk);
     retuneKnob.setName ("retune");
     retuneAtt = setupKnob (retuneKnob, HardTuneProcessor::kRetune);
-    capVal (retuneVal, retuneVal, "");
-    retuneVal.setText (fmtMs (rawValue (HardTuneProcessor::kRetune, 75.0f)), juce::dontSendNotification);
+    //  valeur unique, dans sa boite (1010,272,96x30) — regle (a)
+    label (retuneVal, fmtMs (0.0f), 18.0f, kValue, true);
+    label (retuneSub, "SPEED", 18.0f, kInkSoft);
 
-    capVal (humanizeCap, humanizeVal, "HUMANIZE");
+    label (humanizeCap, "HUMANIZE", 18.0f, kInkSoft);
+    label (humanizeVal, "0%", 16.0f, kValue);
     humanizeAtt = setupKnob (humanizeKnob, HardTuneProcessor::kHumanize);
-    capVal (flexCap, flexVal, "FLEX-TUNE");
-    flexAtt = setupKnob (flexKnob, HardTuneProcessor::kAmount); // FLEX-TUNE = dosage de la correction
 
-    // ---- CORRECTION ---------------------------------------------------------
-    cap (corrCap, "CORRECTION", 1162, 279, 22);
-    capVal (vibratoCap, vibratoVal, "VIBRATO");
+    label (flexCap, "FLEX-TUNE", 18.0f, kInkSoft);
+    label (flexVal, "100%", 16.0f, kValue);
+    flexAtt = setupKnob (flexKnob, HardTuneProcessor::kAmount);
+
+    // ---- CORRECTION --------------------------------------------------------
+    label (corrCap, "CORRECTION", 22.0f, kInk);
+    label (vibratoCap, "VIBRATO", 18.0f, kInkSoft);
+    label (vibratoVal, "0%", 16.0f, kValue);
     vibratoAtt = setupKnob (vibratoKnob, HardTuneProcessor::kVibrato);
-    capVal (rateCap, rateVal, "RATE");
+
+    label (rateCap, "RATE", 18.0f, kInkSoft);
+    label (rateVal, "6.0 Hz", 16.0f, kValue);
     rateAtt = setupKnob (rateKnob, HardTuneProcessor::kVibRate);
 
-    // ---- carte du bas -------------------------------------------------------
-    cap (inCap, "INPUT", 834, 516);
-    cap (inPeak, "", 910, 546);
-    inPeak.setText ("PEAK " + fmtDb (-6.2f), juce::dontSendNotification);
-    cap (outCap, "OUTPUT", 1300, 516);
-    cap (outPeak, "", 1208, 556);
-    outPeak.setText ("PEAK " + fmtDb (-5.8f), juce::dontSendNotification);
+    // ---- carte du bas ------------------------------------------------------
+    label (inCap,  "INPUT",  16.0f, kInkSoft);
+    label (inCap2, "INPUT",  16.0f, kInkSoft);
+    label (inPeak, "PEAK", 13.0f, kInkSoft);
+    label (inPeakVal, juce::String::fromUTF8 ("\xe2\x97\x84 ") + fmtDb (-6.2f), 13.0f, kInkSoft);
+
+    label (outCap,  "OUTPUT", 16.0f, kInkSoft);
+    label (outCap2, "OUTPUT", 16.0f, kInkSoft);
+    label (outPeak, "PEAK", 13.0f, kInkSoft);
+    label (outPeakVal, fmtDb (-5.8f) + " " + juce::String::fromUTF8 ("\xe2\x96\xba"), 13.0f, kInkSoft);
+
     addAndMakeVisible (meterIn);
     addAndMakeVisible (meterOut);
     addAndMakeVisible (gauge);
 
-    cap (formantCap, "FORMANT (INACTIF)", 820, 686, 17);
-    formantCap.setColour (juce::Label::textColourId, juce::Colour (0xff9aa7ae));
+    label (formantCap, "FORMANT (INACTIF)", 16.0f, juce::Colour (0xff9aa7ae));
     addAndMakeVisible (formantBar);
     formantAtt = std::make_unique<SliderAtt> (apvts, HardTuneProcessor::kFormant, formantBar);
-    formantBar.setEnabled2 (false);
+    formantBar.setEnabled2 (false);   // grise, non cliquable (§6)
 
-    cap (transposeCap, "TRANSPOSE", 1180, 686);
-    capVal (transposeVal, transposeVal, "");
-    transposeVal.setText (fmtSt (0), juce::dontSendNotification);
-    transposeVal.setFont (ht::font (17.0f, true));
-    transposeVal.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
+    label (transposeCap, "TRANSPOSE", 16.0f, kInkSoft);
+    label (transposeVal, "0 st", 16.0f, kValue, true);
     addAndMakeVisible (transposeBar);
     transposeAtt = std::make_unique<SliderAtt> (apvts, HardTuneProcessor::kTranspose, transposeBar);
 
-    // taille fixe 1408x768 ; le bouton ⤢ applique une vraie échelle (transform)
     setResizable (false, false);
-    setSize (W, H);
-
+    applyScale (0.6);          // taille par defaut : x0.6 -> 845x461
     applyTheme();
     startTimerHz (30);
 }
 
-HardTuneEditor::~HardTuneEditor() { stopTimer(); }
+HardTuneEditor::~HardTuneEditor()
+{
+    stopTimer();
+    keyBox.setLookAndFeel (nullptr);
+    scaleBox.setLookAndFeel (nullptr);
+}
 
 float HardTuneEditor::rawValue (const char* id, float fb) const
 {
-    //  On lit la valeur BRUTE du parametre (deja denormalisee : 0..400 ms,
-    //  0..100 %, index de gamme...). La formule precedente passait par
-    //  getValue() * (max - min) + min, mais RangedAudioParameter n'expose plus
-    //  getMinimum()/getMaximum() en JUCE 9.
     if (auto* p = proc.apvts.getRawParameterValue (id))
         return p->load();
 
     return fb;
 }
 
-juce::Label& HardTuneEditor::cap (juce::Label& l, const juce::String& t, int x, int y, int h,
-                                  juce::Colour c)
+juce::Label& HardTuneEditor::label (juce::Label& l, const juce::String& t, float size,
+                                    juce::Colour c, bool bold, float dx)
 {
+    juce::ignoreUnused (dx);
     addAndMakeVisible (l);
     l.setText (t, juce::dontSendNotification);
-    l.setFont (ht::font (h >= 19 ? 19.0f : 17.0f));
+    l.setFont (ht::font (size, bold));
     l.setColour (juce::Label::textColourId, c);
+    l.setJustificationType (juce::Justification::centred);
+    l.setInterceptsMouseClicks (false, false);
     return l;
+}
+
+void HardTuneEditor::applyScale (double factor)
+{
+    setSize ((int) (W * factor), (int) (H * factor));
+    setTransform (juce::AffineTransform::scale ((float) factor));
 }
 
 void HardTuneEditor::applyTheme()
@@ -193,111 +183,151 @@ void HardTuneEditor::applyTheme()
     const bool dark = proc.apvts.getRawParameterValue (HardTuneProcessor::kDarkMode)->load() > 0.5f;
     pal = dark ? ht::darkPalette() : ht::lightPalette();
     setOpaque (true);
+
     for (auto* k : { &retuneKnob, &humanizeKnob, &flexKnob, &vibratoKnob, &rateKnob })
         k->setPalette (pal);
     for (auto* b : { &formantBar, &transposeBar })
         b->setPalette (pal);
     for (auto* s : { &lightSwitch, &bypassSwitch })
         s->setPalette (pal);
+
     scope.setPalette (pal);
     gauge.setPalette (pal);
     meterIn.setPalette (pal);
     meterOut.setPalette (pal);
+
+    const juce::Colour ink  = dark ? pal.ink : kInk;
+    const juce::Colour soft = dark ? pal.inkSoft : kInkSoft;
+    const juce::Colour blue = dark ? pal.accentLight : kBlue;
+    const juce::Colour val  = dark ? pal.accentLight : kValue;
+
+    titleLabel.setColour (juce::Label::textColourId, blue);
+    for (auto* l : { &keyCap, &scaleCap, &bypassCap, &retuneCap, &corrCap, &waveCap, &keysCap })
+        l->setColour (juce::Label::textColourId, ink);
+    lightCap.setColour (juce::Label::textColourId, blue);
+
+    for (auto* l : { &retuneSub, &humanizeCap, &flexCap, &vibratoCap, &rateCap,
+                     &inCap, &inCap2, &outCap, &outCap2, &transposeCap })
+        l->setColour (juce::Label::textColourId, soft);
+    for (auto* l : { &inPeak, &outPeak, &inPeakVal, &outPeakVal })
+        l->setColour (juce::Label::textColourId, soft);
+
+    for (auto* l : { &retuneVal, &humanizeVal, &flexVal, &vibratoVal, &rateVal, &transposeVal })
+        l->setColour (juce::Label::textColourId, val);
+
+    formantCap.setColour (juce::Label::textColourId, pal.inkFaint);
+    formantBar.setAlpha (0.75f);
+
     repaint();
 }
 
 void HardTuneEditor::paint (juce::Graphics& g)
 {
-    // fond aqua dégradé (mesuré sur la référence)
-    juce::ColourGradient bg (juce::Colour (0xffc9e8f2), 0, 0,
-                             juce::Colour (0xff84b0ce), 0, (float) H, false);
+    // fond page : #c9e8f2 -> #a3d3e4 -> #84b0ce
+    const juce::Colour top    = pal.win1;
+    const juce::Colour bottom = pal.win2;
+    juce::ColourGradient bg (top, 0.0f, 0.0f, bottom, 0.0f, (float) H, false);
+    bg.addColour (0.5, top.interpolatedWith (bottom, 0.5f));
     g.setGradientFill (bg);
     g.fillAll();
 
     auto card = [&] (int x, int y, int w, int h)
     {
-        juce::ColourGradient cg (pal.card1, 0, (float) y, pal.card2, 0, (float) (y + h), false);
+        auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+        juce::ColourGradient cg (pal.card1, 0.0f, (float) y, pal.card2, 0.0f, (float) (y + h), false);
         g.setGradientFill (cg);
-        g.fillRoundedRectangle (juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h), 9.0f);
+        g.fillRoundedRectangle (r, 9.0f);
         g.setColour (pal.cardEdge);
-        g.drawRoundedRectangle (juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h), 9.0f, 1.0f);
+        g.drawRoundedRectangle (r, 9.0f, 1.0f);
     };
 
-    card (24, 18, 1360, 60);     // en-tête
+    card (24, 18, 1360, 60);     // en-tete
     card (24, 95, 1360, 150);    // clavier
     card (24, 265, 758, 470);    // waveform
-    card (797, 265, 328, 217);   // retune
+    card (797, 265, 328, 217);   // retune speed
     card (1142, 265, 240, 217);  // correction
     card (797, 500, 585, 235);   // carte du bas
 
-    // bandeau dégradé à gauche de l'en-tête
-    juce::ColourGradient strip (juce::Colour (0xff4fc0e8), 0, 18,
-                                 juce::Colour (0xff14618f), 0, 78, false);
+    // bandeau degrade de l'en-tete
+    juce::ColourGradient strip (juce::Colour (0xff4fc0e8), 0.0f, 18.0f,
+                                 juce::Colour (0xff14618f), 0.0f, 78.0f, false);
     g.setGradientFill (strip);
-    g.fillRoundedRectangle (juce::Rectangle<float> (24, 18, 6, 60), 3.0f);
-    // séparateur vertical de l'en-tête
+    g.fillRoundedRectangle (juce::Rectangle<float> (24.0f, 18.0f, 6.0f, 60.0f), 3.0f);
+
+    // separateur vertical de l'en-tete
     g.setColour (pal.cardEdge);
     g.drawLine (300.0f, 26.0f, 300.0f, 70.0f, 1.0f);
+
+    // boite de la valeur RETUNE (une seule fois, en haut a droite)
+    auto rb = juce::Rectangle<float> (1010.0f, 272.0f, 96.0f, 30.0f);
+    g.setColour (juce::Colour (0xfff7feff).withAlpha (0.80f));
+    g.fillRoundedRectangle (rb, 6.0f);
+    g.setColour (juce::Colour (0xff9dc9e2));
+    g.drawRoundedRectangle (rb, 6.0f, 1.0f);
 }
 
 void HardTuneEditor::resized()
 {
-    // coordonnées fixes 1408x768 ; cycleSize() applique l'échelle via setTransform
-    juce::ignoreUnused (getWidth(), getHeight());
-    // en-tête
-    titleLabel.setBounds (44, 24, 220, 44);
-    verLabel.setBounds (700, 40, 140, 20);
-    keyCap.setBounds (322, 32, 60, 26);
-    keyBox.setBounds (378, 26, 52, 34);
-    scaleCap.setBounds (470, 32, 70, 26);
-    scaleBox.setBounds (552, 26, 126, 34);
-    lightCap.setBounds (1058, 30, 70, 26);
-    lightSwitch.setBounds (1136, 25, 50, 28);
-    bypassCap.setBounds (1190, 30, 90, 26);
+    // ---- en-tete -----------------------------------------------------------
+    titleLabel .setBounds (44, 18, 260, 44);
+    keyCap     .setBounds (322, 31, 60, 24);
+    keyBox     .setBounds (378, 28, 52, 34);
+    scaleCap   .setBounds (470, 31, 70, 24);
+    scaleBox   .setBounds (552, 28, 126, 34);
+    lightCap   .setBounds (1058, 32, 70, 24);
+    lightSwitch.setBounds (1136, 27, 50, 28);
+    bypassCap  .setBounds (1190, 32, 90, 24);
     bypassSwitch.setBounds (1248, 25, 50, 28);
-    sizeButton.setBounds (1308, 25, 40, 28);
+    sizeButton .setBounds (1308, 25, 40, 28);
 
-    // clavier
-    keys.setBounds (36, 106, 1348, 106);
-    keysCap.setBounds (40, 218, 300, 24);
+    // ---- clavier -----------------------------------------------------------
+    keys   .setBounds (36, 106, 1348, 106);
+    keysCap.setBounds (40, 212, 320, 24);
 
-    // waveform
-    waveCap.setBounds (43, 272, 300, 26);
-    scope.setBounds (40, 309, 731, 391 + 26);
+    // ---- waveform : cadre peint a (40,309,726x391) -------------------------
+    waveCap.setBounds (43, 272, 340, 26);
+    scope  .setBounds (24, 295, 758, 443 + 26);   // + 26 = place de l'axe
 
-    // retune
-    retuneCap.setBounds (817, 272, 200, 24);
-    retuneKnob.setBounds (887, 300, 120, 120);
-    retuneVal.setBounds (872, 424, 150, 30);
-    humanizeCap.setBounds (810, 452, 100, 20);
-    humanizeKnob.setBounds (812, 300, 60, 60);
-    humanizeVal.setBounds (876, 330, 70, 22);
-    flexCap.setBounds (1010, 452, 100, 20);
-    flexKnob.setBounds (1016, 300, 60, 60);
-    flexVal.setBounds (1080, 330, 70, 22);
+    // ---- RETUNE SPEED ------------------------------------------------------
+    retuneCap  .setBounds (817, 270, 200, 26);
+    retuneVal  .setBounds (1010, 272, 96, 30);
+    humanizeKnob.setBounds (832, 336, 68, 68);    // centre (866,370)
+    humanizeCap .setBounds (box140 (866, 402));
+    humanizeVal .setBounds (box140 (866, 422, 20));
+    retuneKnob  .setBounds (914, 301, 98, 98);    // centre (963,350)
+    retuneSub   .setBounds (box140 (963, 396));
+    flexKnob    .setBounds (1026, 336, 68, 68);   // centre (1060,370)
+    flexCap     .setBounds (box140 (1060, 402));
+    flexVal     .setBounds (box140 (1060, 422, 20));
 
-    // correction
-    corrCap.setBounds (1162, 272, 200, 24);
-    vibratoCap.setBounds (1152, 452, 90, 20);
-    vibratoKnob.setBounds (1156, 300, 60, 60);
-    vibratoVal.setBounds (1220, 330, 70, 22);
-    rateCap.setBounds (1272, 452, 60, 20);
-    rateKnob.setBounds (1272, 300, 60, 60);
-    rateVal.setBounds (1336, 330, 60, 22);
+    // ---- CORRECTION --------------------------------------------------------
+    corrCap    .setBounds (1162, 270, 200, 26);
+    vibratoKnob.setBounds (1160, 320, 72, 72);    // centre (1196,356)
+    vibratoCap .setBounds (box140 (1196, 398));
+    vibratoVal .setBounds (box140 (1196, 418, 20));
+    rateKnob   .setBounds (1252, 320, 72, 72);    // centre (1288,356)
+    rateCap    .setBounds (box140 (1288, 398));
+    rateVal    .setBounds (box140 (1288, 418, 20));
 
-    // carte du bas
-    inCap.setBounds (834, 508, 80, 22);
-    meterIn.setBounds (834, 536, 70, 112);
-    inPeak.setBounds (910, 540, 120, 40);
-    outCap.setBounds (1290, 508, 90, 22);
-    meterOut.setBounds (1300, 536, 70, 112);
-    outPeak.setBounds (1200, 550, 120, 40);
-    gauge.setBounds (993, 510, 190, 190);
-    formantCap.setBounds (820, 680, 200, 22);
-    formantBar.setBounds (820, 706, 176, 22);
-    transposeCap.setBounds (1180, 680, 130, 22);
-    transposeBar.setBounds (1180, 706, 150, 22);
-    transposeVal.setBounds (1338, 680, 50, 22);
+    // ---- carte du bas ------------------------------------------------------
+    inCap     .setBounds (817, 512, 90, 22);
+    meterIn   .setBounds (834, 536, 70, 112);
+    inCap2    .setBounds (834, 648, 90, 22);
+    inPeak    .setBounds (890, 542, 90, 20);
+    inPeakVal .setBounds (866, 566, 120, 20);
+
+    outCap    .setBounds (1290, 512, 100, 22);
+    meterOut  .setBounds (1300, 536, 70, 112);
+    outCap2   .setBounds (1290, 648, 100, 22);
+    outPeak   .setBounds (1180, 552, 90, 20);
+    outPeakVal.setBounds (1166, 576, 120, 20);
+
+    gauge     .setBounds (993, 505, 190, 190);    // centre (1088,600)
+    formantCap.setBounds (820, 684, 210, 22);
+    formantBar.setBounds (820, 700, 176, 26);
+    transposeCap.setBounds (1180, 684, 150, 22);
+    transposeBar.setBounds (1180, 700, 150, 26);
+    transposeVal.setBounds (1338, 682, 60, 22);
 }
 
 void HardTuneEditor::timerCallback()
@@ -308,18 +338,19 @@ void HardTuneEditor::timerCallback()
         if (dark != lastDarkState) { lastDarkState = dark; applyTheme(); }
         lightSwitch.setToggleState (! dark, juce::dontSendNotification);
 
-        // valeurs affichées
-        retuneVal.setText (fmtMs (rawValue (HardTuneProcessor::kRetune, 0.0f)), juce::dontSendNotification);
-        humanizeVal.setText (fmtPct (rawValue (HardTuneProcessor::kHumanize, 32.0f)), juce::dontSendNotification);
-        flexVal.setText (fmtPct (rawValue (HardTuneProcessor::kAmount, 100.0f)), juce::dontSendNotification);
-        vibratoVal.setText (fmtPct (rawValue (HardTuneProcessor::kVibrato, 20.0f)), juce::dontSendNotification);
-        rateVal.setText (fmtHz (rawValue (HardTuneProcessor::kVibRate, 6.0f)), juce::dontSendNotification);
-        transposeVal.setText (fmtSt ((int) rawValue (HardTuneProcessor::kTranspose, 0.0f)), juce::dontSendNotification);
+        retuneVal  .setText (fmtMs (rawValue (HardTuneProcessor::kRetune, 0.0f)), juce::dontSendNotification);
+        humanizeVal.setText (fmtPct (rawValue (HardTuneProcessor::kHumanize, 0.0f)), juce::dontSendNotification);
+        flexVal    .setText (fmtPct (rawValue (HardTuneProcessor::kAmount, 100.0f)), juce::dontSendNotification);
+        vibratoVal .setText (fmtPct (rawValue (HardTuneProcessor::kVibrato, 0.0f)), juce::dontSendNotification);
+        rateVal    .setText (fmtHz (rawValue (HardTuneProcessor::kVibRate, 6.0f)), juce::dontSendNotification);
+        transposeVal.setText (fmtSt ((int) std::lround (rawValue (HardTuneProcessor::kTranspose, 0.0f))),
+                              juce::dontSendNotification);
 
-        // clavier : gamme réelle via le NoteMapper (source unique), noms #/b selon la gamme
-        const int keyIdx = (int) rawValue (HardTuneProcessor::kKey, 0.0f);
-        int scaleIdx = (int) rawValue (HardTuneProcessor::kScale, 1.0f);
-        if (scaleIdx >= (int) tune::NoteMapper::NumScales) scaleIdx = (int) tune::NoteMapper::Major;
+        // clavier : gamme reelle via le NoteMapper (source unique)
+        const int keyIdx = (int) std::lround (rawValue (HardTuneProcessor::kKey, 0.0f));
+        int scaleIdx = (int) std::lround (rawValue (HardTuneProcessor::kScale, 0.0f));
+        if (scaleIdx < 0 || scaleIdx >= (int) tune::NoteMapper::NumScales)
+            scaleIdx = (int) tune::NoteMapper::Chromatic;
         const auto sc = (tune::NoteMapper::Scale) scaleIdx;
         const unsigned mask = tune::NoteMapper::scaleMask (sc);
         const bool minor = sc == tune::NoteMapper::MinorNatural
@@ -331,34 +362,33 @@ void HardTuneEditor::timerCallback()
         const int tgt = proc.getTargetNote();
         keys.setPlaying (tgt, tgt >= 0);
 
-        // waveform : fenêtre de 5 s
+        // waveform : 512 echantillons pousses dans la fenetre de 5 s
         std::array<float, HardTuneProcessor::kScopeSize> buf {};
         proc.copyScope (buf.data());
         scope.pushBlock (buf.data() + (HardTuneProcessor::kScopeSize - 512), 512,
                          (int) proc.getSampleRate());
 
-        // cadran + note (nom selon la gamme)
+        // cadran
         std::array<float, 256> cts {};
         proc.copyCents (cts.data());
         const float cents = cts[(size_t) (proc.kCentsCount - 1)];
         gauge.setData (cents, tgt, minor);
 
-        // vu-mètres + PEAK
+        // vumetres + PEAK
         meterIn.setLevels (proc.getInputPeakDb(), proc.getInputRmsDb());
         meterOut.setLevels (proc.getOutputPeakDb(), proc.getOutputRmsDb());
-        inPeak.setText ("PEAK " + fmtDb (proc.getInputPeakDb()), juce::dontSendNotification);
-        outPeak.setText ("PEAK " + fmtDb (proc.getOutputPeakDb()), juce::dontSendNotification);
+        inPeakVal .setText (juce::String::fromUTF8 ("\xe2\x97\x84 ") + fmtDb (proc.getInputPeakDb()),
+                            juce::dontSendNotification);
+        outPeakVal.setText (fmtDb (proc.getOutputPeakDb()) + " " + juce::String::fromUTF8 ("\xe2\x96\xba"),
+                            juce::dontSendNotification);
     }
-    catch (...) { /* un widget ne doit jamais faire tomber l'hôte */ }
+    catch (...) { /* un widget ne doit jamais faire tomber l'hote */ }
 }
 
 void HardTuneEditor::cycleSize()
 {
-    // cycle : petit (0.75) -> normal (1.0) -> grand (1.5) -> petit ...
-    static const double factors[3] = { 0.75, 1.0, 1.5 };
-    static int idx = 1; // normal au départ
-    idx = (idx + 1) % 3;
-    const double f = factors[idx];
-    setSize (int (W * f), int (H * f));
-    setTransform (juce::AffineTransform::scale ((float) f)); // vraie échelle, layout intact
+    // regle : 0.6 -> 1.0 -> 1.5 -> 0.6
+    static const double factors[3] = { 0.6, 1.0, 1.5 };
+    sizeIdx = (sizeIdx + 1) % 3;
+    applyScale (factors[sizeIdx]);
 }

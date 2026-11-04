@@ -1,5 +1,4 @@
-//  PluginEditor.h — interface paysage 1408x768, fidèle à la maquette validée
-//  contre l'image de référence (élément par élément).
+//  PluginEditor.h — ALPHA-TUNE, interface 1408x768 (SPEC-INTERFACE-v0.6).
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -21,22 +20,25 @@ public:
 private:
     void timerCallback() override;
     void cycleSize();
+    void applyScale (double factor);
     void applyTheme();
     float rawValue (const char* id, float fallback = 0.0f) const;
-    void drawCard (juce::Graphics&, juce::Rectangle<int>) const;
-    juce::Label& cap (juce::Label&, const juce::String&, int x, int y, int h = 19,
-                      juce::Colour c = juce::Colour (0xff0f1b23));
+
+    /** Libelle (x,y) = haut-gauche d'une boite de 140 px centree sur x. */
+    juce::Label& label (juce::Label&, const juce::String& text, float size,
+                        juce::Colour colour, bool bold = false, float dx = 0.0f);
 
     HardTuneProcessor& proc;
     ht::Palette pal;
     bool lastDarkState = false;
+    int  sizeIdx = 0;
 
-    // ---- en-tête (24,18,1360x60) -------------------------------------------
+    // ---- en-tete (24,18,1360x60) -------------------------------------------
     juce::Label  titleLabel, keyCap, scaleCap, lightCap, bypassCap;
-    juce::Label  verLabel;   // numero de version affiche : identifie le build
+    ht::PillLookAndFeel pillLnf;          // declare AVANT les combos (duree de vie)
     juce::ComboBox keyBox, scaleBox;
     ht::PillSwitch lightSwitch { "light" }, bypassSwitch { "bypass" };
-    juce::TextButton sizeButton { "size" };   // cycle : petit / normal / grand
+    juce::TextButton sizeButton { "size" };
 
     // ---- clavier (24,95,1360x150) ------------------------------------------
     ht::KeyStrip keys;
@@ -47,15 +49,17 @@ private:
     ht::Scope    scope;
 
     // ---- RETUNE SPEED (797,265,328x217) ------------------------------------
-    juce::Label  retuneCap, retuneVal, humanizeCap, humanizeVal, flexCap, flexVal;
+    juce::Label  retuneCap, retuneVal, retuneSub;
+    juce::Label  humanizeCap, humanizeVal, flexCap, flexVal;
     ht::Knob     retuneKnob, humanizeKnob, flexKnob;
 
     // ---- CORRECTION (1142,265,240x217) -------------------------------------
     juce::Label  corrCap, vibratoCap, vibratoVal, rateCap, rateVal;
     ht::Knob     vibratoKnob, rateKnob;
 
-    // ---- carte du bas (797,500,585x235) : meters, cadran, barres -----------
-    juce::Label  inCap, outCap, inPeak, outPeak, noteCap, formantCap, transposeCap, transposeVal;
+    // ---- carte du bas (797,500,585x235) ------------------------------------
+    juce::Label  inCap, inCap2, outCap, outCap2, inPeak, inPeakVal, outPeak, outPeakVal;
+    juce::Label  formantCap, transposeCap, transposeVal;
     ht::LevelMeter meterIn, meterOut;
     ht::Gauge    gauge;
     ht::BarControl formantBar, transposeBar;

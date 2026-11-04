@@ -47,7 +47,10 @@ public:
         track.addCentredArc (c.x, c.y, R, R, 0.0f,
                              juce::degreesToRadians (135.0f),
                              juce::degreesToRadians (405.0f), true);
-        g.setColour (pal.ringTrack);
+        juce::ColourGradient trackGrad (juce::Colour (0xffe7edf1), c.x - R, c.y - R,
+                                        juce::Colour (0xff9fabb4), c.x + R, c.y + R, false);
+        trackGrad.addColour (0.5, juce::Colour (0xffc3cdd5));
+        g.setGradientFill (trackGrad);
         g.strokePath (track, juce::PathStrokeType (ring, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::butt));
 
@@ -392,7 +395,7 @@ public:
                     juce::Rectangle<float> (c.x - d * 0.30f, c.y + d * 0.16f, d * 0.60f, d * 0.20f),
                     juce::Justification::centred, false);
         g.setColour (juce::Colour (0xff16242e));
-        g.setFont (font (d * 0.070f));
+        g.setFont (font (13.0f));   // taille fixe imposee par la reference
         const int cv = (int) std::lround (value);
         g.drawText ((cv > 0 ? "+" : "") + juce::String (cv),
                     juce::Rectangle<float> (c.x + d * 0.10f, c.y - d * 0.06f, d * 0.28f, d * 0.14f),
@@ -416,11 +419,11 @@ class Scope : public juce::Component
 public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
 
-    /** `cols` = nombre de colonnes (largeur du cadre). Fenêtre fixe de 5 s. */
+    /** `cols` = nombre de colonnes (largeur du cadre). Fenetre fixe de 5 s. */
     void pushBlock (const float* s, int n, int sampleRate)
     {
         const int cols = (int) colMin.size();
-        const int perCol = juce::jmax (1, (int) (5.0 * sampleRate / cols)); // fenêtre 5 s
+        const int perCol = juce::jmax (1, (int) (5.0 * sampleRate / cols));
         for (int i = 0; i < n; ++i)
         {
             const float a = s[i];
@@ -435,30 +438,35 @@ public:
         repaint();
     }
 
-    void resetWindow()
-    {
-        colMin.fill (0.0f); colMax.fill (0.0f);
-        cursor = 0; pos = 0;
-        repaint();
-    }
+    void resetWindow() { colMin.fill (0.0f); colMax.fill (0.0f); cursor = 0; pos = 0; repaint(); }
 
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
         if (b.getWidth() < 16.0f || b.getHeight() < 16.0f) return;
-        const float pad = 16.0f;
-        auto frame = b.reduced (pad, 14.0f).removeFromBottom (24.0f); // place pour l'axe du temps
+
+        auto frame = b.reduced (16.0f, 14.0f);
+        frame.removeFromBottom (24.0f);   // place pour l'axe du temps
         const float mid = frame.getCentreY();
         const float amp = frame.getHeight() * 0.47f;
-        const int cols = (int) colMin.size();
+        const int   cols = (int) colMin.size();
 
-        // fond dégradé cyan -> bleu (mesuré sur la référence)
-        juce::ColourGradient bg (juce::Colour (0xffb5e7ea), frame.getX(), 0,
-                                 juce::Colour (0xffb7d0e6), frame.getRight(), 0, false);
-        g.setGradientFill (bg);
-        g.fillRoundedRectangle (frame, 8.0f);
+        // fond : degrade horizontal + voile blanc vertical (haut et bas)
+        {
+            juce::ColourGradient bg (juce::Colour (0xffb5e7ea), frame.getX(), 0.0f,
+                                     juce::Colour (0xffb7d0e6), frame.getRight(), 0.0f, false);
+            bg.addColour (0.5, juce::Colour (0xffb5dbea));
+            g.setGradientFill (bg);
+            g.fillRoundedRectangle (frame, 8.0f);
 
-        // grille : 1 graduation par seconde (0..5 s) + lignes horizontales
+            juce::ColourGradient ov (juce::Colours::white.withAlpha (0.78f), 0.0f, frame.getY(),
+                                     juce::Colours::white.withAlpha (0.80f), 0.0f, frame.getBottom(), false);
+            ov.addColour (0.45, juce::Colours::white.withAlpha (0.0f));
+            g.setGradientFill (ov);
+            g.fillRoundedRectangle (frame, 8.0f);
+        }
+
+        // grille
         g.setColour (juce::Colour (0xff465055).withAlpha (0.20f));
         for (int i = 1; i < 5; ++i)
             g.drawVerticalLine ((int) (frame.getX() + frame.getWidth() * i / 5.0f),
@@ -466,51 +474,54 @@ public:
         g.setColour (juce::Colour (0xff537576).withAlpha (0.50f));
         g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.25f), frame.getX(), frame.getRight());
         g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.75f), frame.getX(), frame.getRight());
-        // ligne zéro
         g.setColour (juce::Colour (0xff3f6a7c));
-        //  JUCE 9 : drawHorizontalLine n'accepte plus d'epaisseur.
         g.drawLine (frame.getX(), mid, frame.getRight(), mid, 1.1f);
 
-        // courbe : min/max par colonne
-        juce::Path wave, sat;
+        // courbe : UN point par colonne (la plus grande deviation)
+        const float ceilY  = frame.getY() + 2.4f;
+        const float floorY = frame.getBottom() - 2.4f;
+
+        juce::Path curve, sat;
         bool started = false, satStarted = false;
-        const float ceilY = frame.getY() + 2.4f;
+
         for (int i = 0; i < cols; ++i)
         {
-            const float x = frame.getX() + frame.getWidth() * (i + 0.5f) / cols;
-            float yTop = mid - colMax[(size_t) i] * amp;
-            float yBot = mid - colMin[(size_t) i] * amp;
-            const bool clipped = colMax[(size_t) i] >= 0.999f || colMin[(size_t) i] <= -0.999f;
-            if (clipped) { yTop = juce::jmin (yTop, ceilY); yBot = juce::jmax (yBot, frame.getBottom() - 2.4f); }
-            if (! started) { wave.startNewSubPath (x, yTop); started = true; }
-            wave.lineTo (x, yTop);
-            wave.lineTo (x, yBot);
+            const float mn = colMin[(size_t) i], mx = colMax[(size_t) i];
+            const float v  = std::abs (mx) >= std::abs (mn) ? mx : mn;
+            const float x  = frame.getX() + frame.getWidth() * (i + 0.5f) / cols;
+            const bool clipped = mx >= 0.999f || mn <= -0.999f;
+            const float y = clipped ? (mx >= 0.999f ? ceilY : floorY) : (mid - v * amp);
+
+            if (! started) { curve.startNewSubPath (x, y); started = true; }
+            curve.lineTo (x, y);
+
             if (clipped)
             {
-                if (! satStarted) { sat.startNewSubPath (x, ceilY); satStarted = true; }
-                else sat.lineTo (x, ceilY);
+                if (! satStarted) { sat.startNewSubPath (x, y); satStarted = true; }
+                else sat.lineTo (x, y);
             }
-            else if (satStarted) { satStarted = false; }
+            else satStarted = false;
         }
-        g.setColour (juce::Colour (0xff22638f));
-        g.strokePath (wave, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
-                                                 juce::PathStrokeType::rounded));
-        // partie saturée : droite, collée au plafond, ROUGE
+
+        // saturation : partie collee au plafond, droite et rouge, avec halo
         if (satStarted)
         {
-            g.setColour (juce::Colour (0x66d02a1e));
+            g.setColour (juce::Colour (0xffd02a1e).withAlpha (0.28f));
             g.strokePath (sat, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved,
                                                      juce::PathStrokeType::rounded));
             g.setColour (juce::Colour (0xffd02a1e));
-            g.strokePath (sat, juce::PathStrokeType (3.4f, juce::PathStrokeType::curved,
+            g.strokePath (sat, juce::PathStrokeType (3.3f, juce::PathStrokeType::curved,
                                                      juce::PathStrokeType::rounded));
         }
 
-        // contour du cadre
+        g.setColour (juce::Colour (0xff22638f));
+        g.strokePath (curve, juce::PathStrokeType (3.3f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+
         g.setColour (juce::Colour (0xff9dacae));
         g.drawRoundedRectangle (frame, 8.0f, 1.0f);
 
-        // axe du temps : 0s -> 5s, une graduation par seconde
+        // axe du temps
         g.setFont (font (15.0f));
         g.setColour (juce::Colour (0xff4a6875));
         for (int i = 0; i <= 5; ++i)
@@ -518,10 +529,10 @@ public:
             const float x = frame.getX() + frame.getWidth() * i / 5.0f;
             g.drawLine (x, frame.getBottom(), x, frame.getBottom() + 5.0f, 1.0f);
             auto just = i == 0 ? juce::Justification::left
-                     : i == 5 ? juce::Justification::right
-                              : juce::Justification::centred;
+                      : i == 5 ? juce::Justification::right
+                               : juce::Justification::centred;
             g.drawText (juce::String (i) + "s",
-                        juce::Rectangle<float> (x - 20, frame.getBottom() + 7, 40, 16),
+                        juce::Rectangle<float> (x - 20.0f, frame.getBottom() + 7.0f, 40.0f, 16.0f),
                         just, false);
         }
     }
@@ -588,6 +599,43 @@ public:
 private:
     Palette pal = lightPalette();
     float peak = -100.0f, rms = -100.0f;
+};
+
+// ---------------------------------------------------------------------------
+//  Listes deroulantes habillees en "pill" (KEY / SCALE).
+// ---------------------------------------------------------------------------
+class PillLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawComboBox (juce::Graphics& g, int w, int h, bool,
+                       int, int, int, int, juce::ComboBox&) override
+    {
+        auto b = juce::Rectangle<float> (0.0f, 0.0f, (float) w, (float) h).reduced (0.5f);
+        juce::ColourGradient grad (juce::Colour (0xffbfe6f8), 0.0f, b.getY(),
+                                   juce::Colour (0xffa5d9f4), 0.0f, b.getBottom(), false);
+        g.setGradientFill (grad);
+        g.fillRoundedRectangle (b, 7.0f);
+        g.setColour (juce::Colour (0xff9dc9e2));
+        g.drawRoundedRectangle (b, 7.0f, 1.0f);
+
+        // petit chevron, sinon rien n'indique que la pill s'ouvre
+        juce::Path chev;
+        const float cx = b.getRight() - 13.0f, cy = b.getCentreY();
+        chev.startNewSubPath (cx - 4.0f, cy - 2.0f);
+        chev.lineTo (cx, cy + 2.5f);
+        chev.lineTo (cx + 4.0f, cy - 2.0f);
+        g.setColour (juce::Colour (0xff0e4d72));
+        g.strokePath (chev, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+    }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (10, 0, box.getWidth() - 24, box.getHeight());
+        label.setFont (font (19.0f, true));
+        label.setColour (juce::Label::textColourId, juce::Colour (0xff0e4d72));
+        label.setJustificationType (juce::Justification::centredLeft);
+    }
 };
 
 } // namespace ht
