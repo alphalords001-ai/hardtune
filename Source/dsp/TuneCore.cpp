@@ -232,8 +232,14 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
                 stickyNote = cand;
         }
 
-        const double targetMidi = (double) (stickyNote + params.transpose);
-        double cents = (targetMidi - midiF) * 100.0 * (double) params.amount;
+        //  v0.8.2 (2/2) — TRANSPOSE N'EST PAS UNE CORRECTION. Il ne doit pas être
+        //  dosé par AMOUNT : mesuré avant, AMOUNT 0 % + TRANSPOSE +2 donnait
+        //  226,00 Hz, soit AUCUNE transposition, et à AMOUNT 50 % une demi-
+        //  transposition (236,24 Hz au lieu de 246,94). Deux réglages
+        //  indépendants dans l'interface, un seul dans le calcul.
+        const double targetMidi = (double) stickyNote;
+        double cents = ((targetMidi - midiF) * (double) params.amount
+                        + (double) params.transpose) * 100.0;
 
         //  VIBRATO et HUMANIZE sont des effets DEMANDÉS, pas des erreurs de
         //  justesse : ils ne passent PAS dans le lisseur du retune. Mesuré avant
