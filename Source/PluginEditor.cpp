@@ -157,13 +157,19 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     addAndMakeVisible (targetCaption);
     makeCaption (targetCaption, "target C3", 9.5f);
 
+    //  v0.8.0 : le moteur Live est une ligne à retard — il ne peut pas déplacer
+    //  les formants indépendamment de la hauteur. Le réglage reste présent pour
+    //  ne pas invalider les presets existants, mais il n'a plus d'effet : on le
+    //  montre inactif plutôt que de laisser croire à un contrôle.
     addAndMakeVisible (formantCaption);
-    makeCaption (formantCaption, "FORMANT", 9.5f);
+    makeCaption (formantCaption, "FORMANT (INACTIF)", 9.5f);
     addAndMakeVisible (formantValue);
-    makeLabel (formantValue, "0", 11.0f, pal.ink);
+    makeLabel (formantValue, "\u2014", 11.0f, pal.inkFaint);
     formantValue.setJustificationType (Justification::centredRight);
     addAndMakeVisible (formantBar);
     formantBar.setPalette (pal);
+    formantBar.setAlpha (0.35f);
+    formantBar.setInterceptsMouseClicks (false, false);
 
     addAndMakeVisible (transposeCaption);
     makeCaption (transposeCaption, "TRANSPOSE", 9.5f);
@@ -619,8 +625,7 @@ void HardTuneEditor::refreshFromProcessor()
                       dontSendNotification);
     rateValue.setText (String (raw (HardTuneProcessor::kVibRate), 1) + " Hz", dontSendNotification);
 
-    const int fmt = (int) std::lround (raw (HardTuneProcessor::kFormant));
-    formantValue.setText (signedInt (fmt), dontSendNotification);
+    formantValue.setText (String::fromUTF8 ("\u2014"), dontSendNotification);
     const int tr = (int) std::lround (raw (HardTuneProcessor::kTranspose));
     transposeValue.setText (signedInt (tr) + " st", dontSendNotification);
 

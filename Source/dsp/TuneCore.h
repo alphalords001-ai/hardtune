@@ -4,7 +4,7 @@
 //
 //      PitchDetector (MPM/NSDF, 70-1000 Hz)
 //            -> décision de hauteur : note visée, tolérance, lissage
-//            -> PsolaEngine (TD-PSOLA, grains calés sur la période)
+//            -> LiveEngine (ligne à retard à lecture pitch-synchrone)
 //
 //  Ce que la v0.7.0 change par rapport à la v0.6.2 :
 //
@@ -29,7 +29,7 @@
 #include "PitchDetector.h"
 #include "NoteMapper.h"
 #include "TuneMath.h"
-#include "PsolaEngine.h"
+#include "LiveEngine.h"
 
 namespace tune
 {
@@ -100,7 +100,7 @@ private:
 
     // --- moteurs ------------------------------------------------------------
     PitchDetector detector;
-    PsolaEngine   engine;
+    LiveEngine   engine;
 
     // --- décision de hauteur ------------------------------------------------
     NoteMapper mapper;
@@ -118,16 +118,12 @@ private:
     double amountSm    = 1.0;
     int    holdSamples = 0;
 
-    // --- retard de commande -------------------------------------------------
-    //  Le détecteur mesure la hauteur du son d'il y a une demi-fenêtre ; le
-    //  grain en cours de fabrication est, lui, en arrière de `latence`. On
-    //  applique donc la commande créée `controlDelaySamples` échantillons plus
-    //  tôt : c'est cette commande-là qui décrit le son que le moteur fabrique.
-    std::vector<double> ctrlRatio;
-    std::vector<double> ctrlPeriod;
-    int ctrlMask         = 0;
-    int ctrlPos          = 0;
-    int ctrlDelayChunks  = 0;
+    // --- état voisé ----------------------------------------------------------
+    //  Vrai tant que le détecteur entend une hauteur, y compris pendant le
+    //  maintien après consonne : c'est ce que le moteur doit savoir pour décider
+    //  s'il peut sauter un cycle.
+    bool   voicedNow = false;
+    int    unvoicedFrames = 0;   // hops consécutifs sans hauteur
 
     // --- humanize / vibrato -------------------------------------------------
     unsigned int rngState = 0x12345678u;

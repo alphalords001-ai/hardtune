@@ -2,13 +2,13 @@
 //
 //  But : vérifier objectivement la justesse du moteur avant de l'écouter.
 //    - précision de la détection (MPM/NSDF)
-//    - justesse de la correction (TD-PSOLA)
+//    - justesse de la correction (ligne a retard, mode Live)
 //    - latence réelle annoncée
 //    - transparence quand amount = 0
 //    - absence de NaN / instabilité
 //
 //  Compilation :  g++ -O2 -std=c++17 -I Source/dsp tests/dsp_offline.cpp \
-//                     Source/dsp/PitchDetector.cpp Source/dsp/PsolaEngine.cpp \
+//                     Source/dsp/PitchDetector.cpp Source/dsp/LiveEngine.cpp \
 //                     Source/dsp/TuneCore.cpp -o dsp_tests
 #include <cstdio>
 #include <cmath>
@@ -295,7 +295,7 @@ static RunResult runCore (const std::vector<float>& in, double sr,
 
 static void testPitchCorrection()
 {
-    std::printf ("\nTEST 3 — correction de hauteur (TD-PSOLA)\n");
+    std::printf ("\nTEST 3 \u2014 correction de hauteur\n");
     const double sr = 48000.0;
     const int    N  = 96000;              // 2 s
 
@@ -404,10 +404,11 @@ static void testLatency()
 
     check (std::abs (bestLag - r.latency) <= 120,
            "latence reelle = latence annoncee (ecart <= 2.5 ms)", detail);
-    //  v0.7.0 : Rubber Band (2080 ech. + FIFO = 56 ms) est remplace par
-    //  TD-PSOLA. La latence ne depend plus que de la geometrie des grains
-    //  (1,5 x periode de 70 Hz + 2 tranches), soit ~24-25 ms a 48 kHz.
-    check (r.latency <= (int) (0.030 * sr), "latence <= 30 ms", detail);
+    //  v0.8.0 : le moteur PSOLA (26 ms) est remplace par une ligne a retard a
+    //  lecture pitch-synchrone. La latence ne depend plus de la note ni de la
+    //  taille d'un anneau : elle vaut 1/400 s plus une constante de quelques
+    //  echantillons, soit 2,7 ms a 48 kHz.
+    check (r.latency <= (int) (0.005 * sr), "latence <= 5 ms", detail);
 }
 
 // ---------------------------------------------------------------------------
@@ -830,83 +831,138 @@ static double spectralPeak (const std::vector<float>& x, int start, int len,
     return fine;
 }
 
-static void testFormantPreservation()
+// ---------------------------------------------------------------------------
+//  TEST 12 — les sauts de cycle ne cliquent pas
+// ---------------------------------------------------------------------------
+//  Pour changer la hauteur, le moteur saute une periode en avant ou en arriere
+//  des que le point de lecture a derive d'un cycle. Sur un signal periodique ce
+//  saut est exactement continu ; sur un signal qui bouge (voyelle, note qui
+//  demarre) il ne l'est pas, et c'est le fondu qui doit absorber l'ecart. Ce
+//  test verifie qu'aucune discontinuite ne sort du moteur : sur une sinusoide,
+//  la plus grande difference entre deux echantillons consecutifs de la sortie ne
+//  doit pas depasser celle de la sinusoide elle-meme.
+static void testSplicesWithoutClicks()
 {
-    std::printf ("\nTEST 12 \u2014 preservation des formants\n");
+    std::printf ("\nTEST 12 \u2014 sauts de cycle sans clic\n");
     const double sr = 48000.0;
     const int    N  = 96000;
-    const double f0in    = 185.0;
-    const double formant = 3000.0;
+    const double f0 = 220.0;
 
-    //  Voix synthétique : harmoniques 1..24 avec une résonance ÉTROITE à 3 kHz.
-    //  C'est le cas qui trahit le « Mickey Mouse » : un moteur qui rééchantillonne
-    //  déplace le pic du formant avec la hauteur, un moteur PSOLA le laisse en place.
     std::vector<float> in ((size_t) N, 0.0f);
-    for (int h = 1; h <= 24; ++h)
-    {
-        const double f = f0in * (double) h;
-        if (f > sr * 0.45) break;
+    for (int i = 0; i < N; ++i)
+        in[(size_t) i] = (float) (0.4 * std::sin (2.0 * kPi * f0 * (double) i / sr));
 
-        double a = 0.35 / std::pow ((double) h, 1.2);
-        a *= 1.0 + 8.0 * std::exp (-0.5 * std::pow ((f - formant) / 120.0, 2.0));
-
-        for (int i = 0; i < N; ++i)
-            in[(size_t) i] += (float) (a * std::sin (2.0 * kPi * f * (double) i / sr));
-    }
-
-    // normalisation à 0.4 de crête
-    {
-        double pk = 0.0;
-        for (float v : in) pk = std::max (pk, (double) std::abs (v));
-        if (pk > 0.0)
-            for (auto& v : in) v = (float) ((double) v * 0.4 / pk);
-    }
-
-    //  185 Hz est exactement F#3 : pour obtenir un decalage IMPORTANT (le cas ou
-    //  l'effet « Mickey Mouse » se manifeste), on transpose de +4 demi-tons.
+    //  Transposition de +1 demi-ton : le rapport de lecture vaut 1,0595 a
+    //  chaque echantillon, donc le point de lecture derive en permanence et le
+    //  moteur saute un cycle toutes les ~17 ms.
     TuneCore::Params p;
-    p.amount = 1.0f; p.retuneMs = 0.0f; p.formant = 0.0f; p.transpose = 4;
+    p.amount = 1.0f; p.retuneMs = 0.0f; p.noteRampMs = 0.0f;
+    p.transpose = 1;
     auto r = runCore (in, sr, p, 512);
 
-    const double f0out = spectralPeak (r.out, N / 2 - 12000, 24000, 150.0, 400.0, sr);
-    if (f0out < 50.0)
+    const double fOut = f0 * std::pow (2.0, 1.0 / 12.0);
+
+    //  Pente maximale theorique d'une sinusoide d'amplitude 0,4 a fOut.
+    const double slopeTheo = 0.4 * 2.0 * kPi * fOut / sr;
+
+    double maxStep = 0.0;
+    int    jumps   = 0;
+    const int a = 12000, b = N - 12000;
+
+    for (int i = a + 1; i < b; ++i)
     {
-        check (false, "hauteur de sortie mesurable", "");
-        return;
-    }
-
-    //  Indice harmonique attendu si les formants sont préservés : le pic reste
-    //  à 3 kHz EN FRÉQUENCE ABSOLUE, donc à l'harmonique 3000/f0_sortie.
-    const int kExpectedPreserved = (int) std::lround (formant / f0out);
-    const int kExpectedResampled = (int) std::lround (formant / f0in);   // défaut « Mickey »
-
-    // amplitude de chaque harmonique de SORTIE, mesurée à k * f0_sortie
-    int   peakK = 0;
-    double peakV = -1.0;
-    double envOut[26] = { 0.0 };
-
-    const int len = 24000, start = N / 2 - len / 2;
-    for (int k = 8; k <= 22; ++k)
-    {
-        envOut[k] = goertzelMag (r.out, start, len, (double) k * f0out, sr);
-        if (envOut[k] > peakV) { peakV = envOut[k]; peakK = k; }
-    }
-
-    double envIn[26] = { 0.0 };
-    int   peakKIn = 0; double peakVIn = -1.0;
-    for (int k = 8; k <= 22; ++k)
-    {
-        envIn[k] = goertzelMag (in, start, len, (double) k * f0in, sr);
-        if (envIn[k] > peakVIn) { peakVIn = envIn[k]; peakKIn = k; }
+        const double d = std::abs ((double) r.out[(size_t) i] - (double) r.out[(size_t) (i - 1)]);
+        maxStep = std::max (maxStep, d);
+        if (d > 2.5 * slopeTheo) ++jumps;
     }
 
     char detail[220];
     std::snprintf (detail, sizeof (detail),
-                   "f0 %.1f -> %.1f Hz (transpose +4) ; pic entree h=%d ; pic sortie h=%d (attendu %d si preserve, %d si reechantillonne)",
-                   f0in, f0out, peakKIn, peakK, kExpectedPreserved, kExpectedResampled);
+                   "pente max %.5f (theorique %.5f, rapport %.2f) ; %d sauts > 2,5 x la pente",
+                   maxStep, slopeTheo, maxStep / std::max (1e-12, slopeTheo), jumps);
+    check (maxStep < 2.5 * slopeTheo,
+           "aucune discontinuite aux sauts de cycle", detail);
 
-    check (peakK == kExpectedPreserved,
-           "le formant reste a 3 kHz (pas d'effet Mickey Mouse)", detail);
+    //  et la hauteur est bien celle demandee
+    const double measured = measureFreqNear (r.out, N / 2 - 6000, 12000, fOut, sr);
+    const double err = std::abs (ratioToCents (measured / fOut));
+    std::snprintf (detail, sizeof (detail), "%.2f Hz mesures, cible %.2f Hz (ecart %.1f cents)",
+                   measured, fOut, err);
+    check (err < 20.0, "le saut de cycle corrige bien la hauteur", detail);
+}
+
+// ---------------------------------------------------------------------------
+//  TEST 13 — la correction est appliquee sans delai
+// ---------------------------------------------------------------------------
+//  C'est le test de regression du defaut de la v0.7.0 : le moteur PSOLA
+//  ecrivait la moitie de chaque grain derriere la tete de lecture, si bien que
+//  la sortie restait a l'ancienne hauteur pendant 72 ms avant de sauter d'un
+//  demi-ton d'un coup (mesure : degressive /tmp/eng4.cpp). Ici la reponse doit
+//  arriver en moins de 35 ms, ce qui inclut la rampe de note de 21 ms.
+static void testImmediateResponse()
+{
+    std::printf ("\nTEST 13 \u2014 reponse immediate du moteur\n");
+    const double sr = 48000.0;
+    const int    N  = 96000;
+    const int    step = N / 2;
+
+    std::vector<float> in ((size_t) N, 0.0f);
+    for (int i = 0; i < N; ++i)
+    {
+        const double f = (i < step) ? 220.0 : 233.082;      // A3 -> A#3 (un demi-ton)
+        in[(size_t) i] = (float) (0.4 * std::sin (2.0 * kPi * f * (double) i / sr));
+    }
+
+    TuneCore::Params p;
+    p.amount = 1.0f; p.retuneMs = 0.0f;
+    auto r = runCore (in, sr, p, 512);
+
+    //  Mesure par passages par zero interpoles : la periode entre deux passages
+    //  croissants donne la frequence INSTANTANEE, avec une resolution d'un
+    //  echantillon. Une fenetre de Goertzel ne suffirait pas : 512 echantillons
+    //  a 48 kHz font 94 Hz de resolution, et 220 / 233 Hz tombent dans le meme
+    //  lobe (verifie : le test ne distinguait rien).
+    std::vector<double> cross;   // instants des passages par zero croissants
+
+    for (int i = 1; i < N; ++i)
+    {
+        const double a = r.out[(size_t) (i - 1)], b = r.out[(size_t) i];
+        if (a <= 0.0 && b > 0.0)
+            cross.push_back ((double) (i - 1) + a / (a - b));
+    }
+
+    int switchAt = -1;
+    double lastF[3] = { 0.0, 0.0, 0.0 };
+
+    for (size_t k = 1; k < cross.size(); ++k)
+    {
+        const double dt = cross[k] - cross[k - 1];
+        if (dt < 40.0 || dt > 400.0) continue;          // saute les passages parasites
+
+        const double f = sr / dt;
+
+        lastF[0] = lastF[1]; lastF[1] = lastF[2]; lastF[2] = f;
+
+        //  mediane des trois dernieres periodes : un saut de cycle isole ne
+        //  doit pas faire croire a un changement de hauteur
+        double a = lastF[0], b = lastF[1], c = lastF[2];
+        const double med = std::max (std::min (a, b), std::min (std::max (a, b), c));
+
+        if (cross[k] > (double) step && med > 226.0) { switchAt = (int) cross[k]; break; }
+    }
+
+    char detail[200];
+
+    if (switchAt < 0)
+    {
+        check (false, "la sortie change de hauteur apres le changement de note", "");
+        return;
+    }
+
+    const double ms = 1000.0 * (double) (switchAt - step) / sr;
+    std::snprintf (detail, sizeof (detail),
+                   "changement de hauteur effectif %.1f ms apres l'entree (v0.7.0 : 72 ms)", ms);
+    check (ms < 35.0, "reponse du moteur < 35 ms", detail);
 }
 
 // ---------------------------------------------------------------------------
@@ -925,7 +981,8 @@ int main()
     testHumanizeVibrato();
     testMeters();
     testSibilantBypass();
-    testFormantPreservation();
+    testSplicesWithoutClicks();
+    testImmediateResponse();
 
     std::printf ("\n=== %s (%d echec(s)) ===\n",
                  gFailures == 0 ? "TOUS LES TESTS PASSENT" : "ECHECS", gFailures);

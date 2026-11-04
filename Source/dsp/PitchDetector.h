@@ -48,6 +48,17 @@ public:
     void setRange (double minHz, double maxHz);
 
     /**
+        Durée d'analyse réellement utilisée, en échantillons réels (0 = la
+        fenêtre maximale préparée). C'est ce réglage qui fait la différence de
+        latence du mode Live : une fenêtre de 29,4 ms décrit le son d'il y a
+        29,4 ms, une fenêtre de deux périodes décrit le son d'il y a 5 à 20 ms.
+        L'appelant la dimensionne sur la période suivie, et revient au maximum
+        quand il n'entend plus de hauteur (sinon on ne peut plus descendre).
+    */
+    void setAnalysisWindow (int samples) noexcept { wantWindow = samples; }
+    int  getActiveWindow() const noexcept { return activeWindow; }
+
+    /**
         Consomme un bloc. Renvoie la dernière estimation disponible.
         `valid` vaut false tant que le pas d'analyse n'a pas été atteint :
         l'appelant conserve alors sa décision précédente (aucun travail inutile).
@@ -60,12 +71,14 @@ public:
 
 private:
     bool   analyse (double& hz, double& clarity);
-    double refineLag (double coarseLagFull) const;
+    double refineLag (double coarseLagFull, const float* x, int w) const;
     void   buildDecimationFilter();
 
     double sr         = 48000.0;
-    int    windowSize = 1024;      // durée d'analyse, en échantillons réels
+    int    windowSize = 1024;      // fenêtre MAXIMALE préparée, en échantillons réels
     int    hopSize    = 128;
+    int    wantWindow = 0;         // fenêtre demandée par l'appelant (0 = maximale)
+    int    activeWindow = 0;       // fenêtre utilisée à la dernière analyse
 
     double minHz = 70.0, maxHz = 1000.0;
 

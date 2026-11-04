@@ -192,10 +192,30 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
     if (tauMax <= tauMin + 4 || (int) dec.size() < nd)
         return false;
 
-    const float* x = tail.data() + (size_t) kTaps;   // signal aligné sur la fenêtre
+    //  Fenêtre réellement analysée : celle demandée par l'appelant (dimensionnée
+    //  sur la période suivie), bornée par la fenêtre préparée. Elle doit rester
+    //  multiple de la décimation et laisser au moins deux échantillons décimés
+    //  au-delà du décalage maximal, sans quoi le NSDF n'a pas de dénominateur.
+    int w = windowSize;
+    if (wantWindow > 0)
+        w = std::min (windowSize, std::max (16 * kDecim, (wantWindow / kDecim) * kDecim));
+
+    int ndA = std::min (nd, w / kDecim);
+
+    if (ndA < tauMin + 6)
+    {
+        w   = windowSize;
+        ndA = nd;
+    }
+
+    activeWindow = ndA * kDecim;
+
+    //  Les échantillons les plus récents sont toujours à la fin de `tail` : une
+    //  fenêtre plus courte se contente de commencer plus tard.
+    const float* x = tail.data() + (size_t) (kTaps + windowSize - activeWindow);
 
     // ---- 1. décimation par 4 (filtre FIR) ------------------------------------
-    for (int j = 0; j < nd; ++j)
+    for (int j = 0; j < ndA; ++j)
     {
         const int base = kDecim * j;
         float acc = 0.0f;
@@ -206,12 +226,12 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
 
     // ---- 2. retrait de la composante continue --------------------------------
     double mean = 0.0;
-    for (int j = 0; j < nd; ++j)
+    for (int j = 0; j < ndA; ++j)
         mean += (double) dec[(size_t) j];
-    mean /= (double) nd;
+    mean /= (double) ndA;
 
     double energy = 0.0;
-    for (int j = 0; j < nd; ++j)
+    for (int j = 0; j < ndA; ++j)
     {
         const double v = (double) dec[(size_t) j] - mean;
         dec[(size_t) j] = (float) v;
@@ -228,18 +248,18 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
     //  r'(tau) = 2 * somme(x[j] x[j+tau]) / somme(x[j]^2 + x[j+tau]^2)
     //  Les sommes de carrés se lisent en O(1) grâce aux préfixes.
     powPrefix[0] = 0.0;
-    for (int j = 0; j < nd; ++j)
+    for (int j = 0; j < ndA; ++j)
     {
         const double v = (double) dec[(size_t) j];
         powPrefix[(size_t) (j + 1)] = powPrefix[(size_t) j] + v * v;
     }
-    const double totalPow = powPrefix[(size_t) nd];
+    const double totalPow = powPrefix[(size_t) ndA];
 
-    const int maxLag = std::min (tauMax, nd - 2);
+    const int maxLag = std::min (tauMax, ndA - 2);
 
     for (int tau = 0; tau <= maxLag; ++tau)
     {
-        const int n = nd - tau;
+        const int n = ndA - tau;
 
         float acc = 0.0f;
         const float* a = dec.data();
@@ -309,7 +329,7 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
     //  recalcule le NSDF sur le signal réel autour de 4 x tauPick : la précision
     //  passe sous le cent, ce qui est nécessaire pour que les grains PSOLA
     //  restent en phase (sinon : « phasiness » et perte d'énergie).
-    const double tauFull = refineLag (tauPick * (double) kDecim);
+    const double tauFull = refineLag (tauPick * (double) kDecim, x, activeWindow);
 
     if (tauFull < 2.0)
         return true;
@@ -324,16 +344,13 @@ bool PitchDetector::analyse (double& hzOut, double& confOut)
 }
 
 // ---------------------------------------------------------------------------
-double PitchDetector::refineLag (double coarseLagFull) const
+double PitchDetector::refineLag (double coarseLagFull, const float* x, int w) const
 {
-    const int w = windowSize;
     const int search = 4;
 
     const int centre = (int) std::lround (coarseLagFull);
     if (centre < 2 || centre + search + 2 >= w)
         return coarseLagFull;
-
-    const float* x = tail.data() + (size_t) kTaps;
 
     double bestVal = -2.0;
     int    bestLag = centre;

@@ -29,7 +29,6 @@ namespace
     //  de détection, pas sur un chanteur faux.
     constexpr double kMaxDemandCents = 600.0;
 
-    constexpr double kFormantRangeCents = 500.0;  // FORMANT ±100 % -> ±500 cents
 
     //  Hystérésis de la note visée (en demi-tons) : évite que la voix bascule
     //  d'une note à l'autre sur un vibrato large.
@@ -86,22 +85,20 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
 
     engine.prepare (sr, maxBlock, numChannels);
 
-    //  Retard de commande = latence du moteur moins la demi-fenêtre d'analyse
-    //  (instant que décrit la mesure). À 48 kHz : 1216 - 704 = 512 échantillons
-    //  (10,7 ms). Sans ce retard, on corrige le son d'il y a 26 ms avec la
-    //  hauteur d'aujourd'hui : sur un vibrato de 6 Hz, la correction part en
-    //  retard de 24 degrés et laisse ~20 cents d'oscillation résiduelle.
-    const int controlDelaySamples = std::max (0, engine.latencySamples()
-                                               - detector.getWindowSize() / 2);
-    ctrlDelayChunks = controlDelaySamples / kChunk;
-
-    int ctrlSize = 1;
-    while (ctrlSize < 2 * (ctrlDelayChunks + 8)) ctrlSize <<= 1;
-    ctrlMask = ctrlSize - 1;
-
-    ctrlRatio.assign ((size_t) ctrlSize, 1.0);
-    ctrlPeriod.assign ((size_t) ctrlSize, sr / 220.0);
-    ctrlPos = 0;
+    //  PLUS DE RETARD DE COMMANDE (v0.8.0).
+    //
+    //  La v0.7.0 devait différer la commande de 448 échantillons (10 ms) pour
+    //  compenser son propre moteur : la latence de 26 ms dépassait la
+    //  demi-fenêtre d'analyse de 29,4 ms, si bien que la correction appliquée
+    //  décrivait un son plus ancien que celui qu'on fabriquait.
+    //
+    //  Ici la fenêtre d'analyse est dimensionnée sur la période suivie (≈ 2,2
+    //  périodes, soit 5 à 20 ms). Sa demi-fenêtre est donc du même ordre que la
+    //  latence du moteur (2,7 ms) : l'écart restant vaut quelques millisecondes
+    //  et va dans le bon sens (l'analyse décrit un son plus ancien que le point
+    //  de lecture, donc la commande arrive après coup). Il n'y a plus rien à
+    //  différer, et l'anneau de commande disparaît avec.
+    detector.setAnalysisWindow (0);     // fenêtre maximale tant qu'on n'entend rien
 
     reset();
     ready = true;
@@ -112,9 +109,7 @@ void TuneCore::reset()
     detector.reset();
     engine.reset();
 
-    std::fill (ctrlRatio.begin(), ctrlRatio.end(), 1.0);
-    std::fill (ctrlPeriod.begin(), ctrlPeriod.end(), sr / 220.0);
-    ctrlPos = 0;
+    voicedNow = false;
 
     stickyValid = false;
     stickyNote  = 60;
@@ -290,6 +285,16 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
 
         lastTarget = stickyNote;
         mixTarget  = 1.0;
+        voicedNow  = true;
+        unvoicedFrames = 0;
+
+        //  FENÊTRE D'ANALYSE ADAPTATIVE.
+        //  Une fenêtre de 2,2 périodes donne un NSDF exploitable (au décalage
+        //  égal à la période, il reste 1,2 période d'intégration) tout en
+        //  ramenant le retard d'analyse à 5-20 ms au lieu de 29,4 ms. C'est ce
+        //  qui permet au mode Live de corriger le son qu'il est en train de
+        //  lire, et non celui d'il y a 30 ms.
+        detector.setAnalysisWindow ((int) std::lround (2.2 * sr / std::max (hz, 1.0)));
 
         uiHz.store ((float) hz);
         uiMidi.store ((float) midiF);
@@ -303,6 +308,17 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
         //  On passe en direct (le moteur est court-circuité) et on relâche la
         //  correction en 15 ms pour ne pas créer de marche de hauteur.
         mixTarget = 0.0;
+        voicedNow = false;
+
+        //  Sans hauteur on garde la dernière fenêtre (une note qui reprend est
+        //  ainsi détectée tout de suite), mais si le silence dure on revient à
+        //  la fenêtre maximale : sinon une voix grave qui démarre après un
+        //  passage aigu ne serait jamais trouvée (la fenêtre courte ne contient
+        //  pas assez d'échantillons pour un décalage de 70 Hz).
+        if (++unvoicedFrames > 20)
+            detector.setAnalysisWindow (0);
+        else if (lastHz > 0.0)
+            detector.setAnalysisWindow ((int) std::lround (2.2 * sr / lastHz));
 
         const double alpha = std::exp (-hopSec / 0.015);
         logHzSm = alpha * logHzSm + (1.0 - alpha) * std::log (sr / periodSm);
@@ -334,7 +350,7 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
     //  Un seul moteur pour tous les canaux : gauche et droite reçoivent
     //  exactement la même correction, un signal mono reste donc parfaitement
     //  mono. Si l'hôte envoie plus de canaux que prepare() n'en a vus, on borne
-    //  et on duplique (voir PsolaEngine::process).
+    //  et on duplique (voir LiveEngine::process).
     const int prepared     = std::max (1, numChannels);
     const int hostChannels = std::max (1, std::min (2, channels));
     const int used         = std::min (hostChannels, prepared);
@@ -348,23 +364,18 @@ void TuneCore::process (const float* const* in, float* const* out, int numSample
         const PitchDetector::Estimate e = detector.process (in[0] + done, n);
         updateDecision (e);
 
-        // ---- 2. retard de commande ------------------------------------------
-        //  On écrit la commande courante et on applique celle d'il y a
-        //  ctrlDelayChunks tranches : c'est celle qui décrit le son que le
-        //  moteur est en train de fabriquer.
-        ctrlRatio[(size_t) ctrlPos & (size_t) ctrlMask]  = ratioSm;
-        ctrlPeriod[(size_t) ctrlPos & (size_t) ctrlMask] = periodSm;
-        ++ctrlPos;
-
-        const int readPos = (ctrlPos - 1 - ctrlDelayChunks) & ctrlMask;
-
-        // ---- 3. moteur ------------------------------------------------------
-        PsolaEngine::Control c;
-        c.ratio   = ctrlRatio[(size_t) readPos];
-        c.period  = ctrlPeriod[(size_t) readPos];
-        c.formant = centsToRatio ((double) params.formant * kFormantRangeCents);
-        c.mix     = params.bypass ? 0.0
-                                  : std::min (1.0, std::max (0.0, mixTarget * (double) params.mix));
+        // ---- 2. moteur -------------------------------------------------------
+        //  Plus d'anneau de commande : la latence du moteur (2,7 ms) est plus
+        //  courte que la demi-fenêtre d'analyse, donc la commande courante
+        //  décrit bien le son que le moteur lit. Le réglage FORMANT n'a plus
+        //  d'effet (une ligne à retard déplace les formants avec la hauteur) :
+        //  il est conservé pour ne pas invalider les presets.
+        LiveEngine::Control c;
+        c.ratio  = ratioSm;
+        c.period = periodSm;
+        c.voiced = voicedNow;
+        c.mix    = params.bypass ? 0.0
+                                 : std::min (1.0, std::max (0.0, mixTarget * (double) params.mix));
 
         const float* ip[2] = { in[0] + done,
                                used > 1 ? in[1] + done : in[0] + done };

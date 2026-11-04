@@ -59,8 +59,8 @@ target_sources(HardTune PRIVATE
     Source/dsp/TuneCore.h
     Source/dsp/PitchDetector.cpp
     Source/dsp/PitchDetector.h
-    Source/dsp/PsolaEngine.cpp
-    Source/dsp/PsolaEngine.h
+    Source/dsp/LiveEngine.cpp
+    Source/dsp/LiveEngine.h
     Source/dsp/NoteMapper.h
     Source/dsp/TuneMath.h
     Source/gui/HardTuneLookAndFeel.cpp
@@ -91,7 +91,7 @@ target_link_libraries(HardTune
 add_executable(hardtune_dsp_tests
     tests/dsp_offline.cpp
     Source/dsp/PitchDetector.cpp
-    Source/dsp/PsolaEngine.cpp
+    Source/dsp/LiveEngine.cpp
     Source/dsp/TuneCore.cpp)
 
 target_include_directories(hardtune_dsp_tests PRIVATE Source/dsp)
