@@ -67,7 +67,7 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
         kTranspose, "Transpose", -6, 6, 0));
 
     layout.add (std::make_unique<AudioParameterBool> (kBypass, "Bypass", false));
-    layout.add (std::make_unique<AudioParameterBool> (kDarkMode, "Dark mode", false));
+    layout.add (std::make_unique<AudioParameterBool> (kDarkMode, "Dark mode", true));
     layout.add (std::make_unique<AudioParameterBool> (kCustomOn, "Custom scale", false));
 
     for (int i = 0; i < 12; ++i)
