@@ -120,6 +120,7 @@ void TuneCore::reset()
     ratioTarget = 1.0;
     ratioSm     = 1.0;
     logHzSm     = std::log (220.0);
+    corrCentsSm = 0.0;
     periodSm    = sr / 220.0;
     mixTarget   = 0.0;
     holdSamples = 0;
@@ -234,9 +235,16 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
         const double targetMidi = (double) (stickyNote + params.transpose);
         double cents = (targetMidi - midiF) * 100.0 * (double) params.amount;
 
+        //  VIBRATO et HUMANIZE sont des effets DEMANDÉS, pas des erreurs de
+        //  justesse : ils ne passent PAS dans le lisseur du retune. Mesuré avant
+        //  correction : vibrato 50 % à 6 Hz donnait 48,4 cents de profondeur à
+        //  retune 0 ms, mais 12,7 à 100 ms et 3,5 à 400 ms. Le retune étouffait
+        //  donc un effet que l'utilisateur avait réglé exprès.
+        double fxCents = 0.0;
+
         // HUMANIZE : petite dérive aléatoire lente (±15 cents max)
         if (params.humanize > 0.0001f)
-            cents += humanizeCents() * (double) params.humanize * 15.0;
+            fxCents += humanizeCents() * (double) params.humanize * 15.0;
 
         // VIBRATO : oscillation ajoutée (±50 cents max)
         if (params.vibrato > 0.0001f)
@@ -245,7 +253,7 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
             vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) hop / sr;
             if (vibratoPhase > 6.283185307179586)
                 vibratoPhase -= 6.283185307179586;
-            cents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
+            fxCents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
         }
 
         cents = std::min (kMaxDemandCents, std::max (-kMaxDemandCents, cents));
@@ -272,16 +280,32 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
         const double tau = std::max ((double) params.retuneMs, std::max (6.0, floorMs)) * 0.001;
         const double alpha = std::exp (-hopSec / std::max (tau, 1.0e-4));
 
-        const double demandedHz = std::max (30.0, hz * centsToRatio (cents));
-        logHzSm = alpha * logHzSm + (1.0 - alpha) * std::log (demandedHz);
+        //  v0.8.2 — ON LISSE LA CORRECTION, PAS LA HAUTEUR DE SORTIE.
+        //  Lisser la hauteur absolue fait traverser à la sortie toutes les
+        //  fréquences entre deux notes : sur A3 -> B3 avec retune 400 ms, la
+        //  sortie s'arrêtait sur 230 Hz puis 240 Hz, c'est-à-dire A#3, une note
+        //  que le chanteur n'avait pas chantée. En lissant l'ERREUR, la voix
+        //  suit le chanteur immédiatement et seul l'écart est ralenti.
+        //  Pas de saut à l'attaque : un test hors DAW a montré qu'en sautant à la
+        //  correction courante sur la première trame voisée, le retune devenait
+        //  inopérant sur toute note démarrant après un silence (mesuré : 232,0 Hz
+        //  à retune 1000 ms au lieu de la montée lente attendue). L'attaque est
+        //  donc corrigée avec la même constante de temps que le reste.
+        corrCentsSm = alpha * corrCentsSm + (1.0 - alpha) * cents;
+
+        const double totalCents = corrCentsSm + fxCents;
+        const double demandedHz = std::max (30.0, hz * centsToRatio (totalCents));
+        logHzSm = std::log (demandedHz);
 
         // ---- période réelle du signal (celle des grains, pas la cible) -------
         const double p = std::min (sr / 70.0, std::max (sr / 1000.0, sr / hz));
         periodSm += (p - periodSm) * (noteChanged ? 1.0 : 0.7);
 
-        ratioTarget = centsToRatio (cents);
-        ratioSm     = std::min (2.0, std::max (0.5,
-                        std::exp (logHzSm) * periodSm / sr));
+        //  Le rapport appliqué EST la correction : il ne dépend plus de periodSm,
+        //  donc une erreur d'estimation de période ne devient plus une erreur de
+        //  hauteur sur la sortie.
+        ratioTarget = centsToRatio (totalCents);
+        ratioSm     = std::min (2.0, std::max (0.5, centsToRatio (totalCents)));
 
         lastTarget = stickyNote;
         mixTarget  = 1.0;
@@ -321,8 +345,9 @@ void TuneCore::updateDecision (const PitchDetector::Estimate& e)
             detector.setAnalysisWindow ((int) std::lround (2.2 * sr / lastHz));
 
         const double alpha = std::exp (-hopSec / 0.015);
-        logHzSm = alpha * logHzSm + (1.0 - alpha) * std::log (sr / periodSm);
-        ratioSm = std::min (2.0, std::max (0.5, std::exp (logHzSm) * periodSm / sr));
+        corrCentsSm = alpha * corrCentsSm;
+        logHzSm = std::log (sr / periodSm);
+        ratioSm = std::min (2.0, std::max (0.5, centsToRatio (corrCentsSm)));
         ratioTarget = 1.0;
 
         holdSamples = std::max (0, holdSamples - hop);

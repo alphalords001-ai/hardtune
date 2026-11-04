@@ -33,7 +33,7 @@ AudioProcessorValueTreeState::ParameterLayout HardTuneProcessor::createParameter
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kRetune, "Retune Speed",
-        NormalisableRange<float> (0.0f, 800.0f, 0.1f, 0.4f), 0.0f));
+        NormalisableRange<float> (0.0f, 400.0f, 0.1f, 0.4f), 0.0f));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         kAmount, "Amount",

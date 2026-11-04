@@ -113,6 +113,7 @@ private:
     double ratioTarget = 1.0;
     double ratioSm     = 1.0;
     double logHzSm     = 0.0;    // logarithme de la hauteur de SORTIE visée
+    double corrCentsSm = 0.0;    // CORRECTION lissée, en cents (pas la hauteur)
     double periodSm    = 0.0;
     double mixTarget   = 0.0;
     double amountSm    = 1.0;
