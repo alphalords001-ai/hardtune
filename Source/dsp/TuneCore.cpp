@@ -25,7 +25,20 @@ namespace
           (int) RubberBand::RubberBandStretcher::OptionProcessRealTime
         | (int) RubberBand::RubberBandStretcher::OptionEngineFiner      // moteur R3
         | (int) RubberBand::RubberBandStretcher::OptionWindowShort      // latence minimale
-        | (int) RubberBand::RubberBandStretcher::OptionPitchHighQuality
+        //  PITCH : PitchHighConsistency et SURTOUT pas PitchHighQuality.
+        //  La documentation de Rubber Band est explicite : PitchHighQuality est
+        //  a ne PAS utiliser pour des changements de hauteur variables dans le
+        //  temps, et PitchHighConsistency est la seule option qui "supporte les
+        //  changements dynamiques de hauteur SANS DISCONTINUITES, y compris en
+        //  traversant le ratio 1.0".
+        //  C'etait la cause des craquements : mesure avec Rubber Band seul,
+        //  glissando de +-20 cents (cas d'un chanteur qui vibre) :
+        //      PitchHighQuality, autour de 1.0        -> 1034 discontinuites
+        //      PitchHighQuality, autour de 1.06/1.41  -> 0
+        //      PitchHighConsistency, autour de 1.0    -> 0
+        //  D'ou le symptome etrange rapporte : plus de craquement des que la
+        //  transposition s'eloignait de 0 demi-ton.
+        | (int) RubberBand::RubberBandStretcher::OptionPitchHighConsistency
         | (int) RubberBand::RubberBandStretcher::OptionFormantPreserved
         | (int) RubberBand::RubberBandStretcher::OptionSmoothingOn
         // Canaux traites ENSEMBLE : sans cette option, Rubber Band elargit
@@ -98,7 +111,11 @@ void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
         //  code (chirp 200->400 Hz, correlation 1.0000). Il vaut donc mieux
         //  annoncer la valeur mesuree : sous-declarer la latence fait arriver
         //  la voix en retard sur le reste du projet.
-        const double surplusReel = 768.0 * (sr / 48000.0);
+        //  Avec PitchHighConsistency le retard reel mesure passe de 2048 a
+        //  2080 echantillons, et cette valeur est CONSTANTE en echantillons :
+        //  mesuree identique a 44100 et a 48000 Hz (chirp, correlation 1.0000).
+        //  Le surplus au-dela de getStartDelay() vaut donc 800 echantillons.
+        const double surplusReel = 800.0;
         const int newLatency = (int) newStretcher->getStartDelay() + (int) std::lround (surplusReel);
 
         // Plancher 100 Hz (G2) : la fenetre reste a 1024 echantillons (21 ms).
