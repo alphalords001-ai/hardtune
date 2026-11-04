@@ -472,10 +472,11 @@ void HardTuneEditor::resized()
     // ---- carte PITCH CORRECTION / VIBRATO / RATE ---------------------------
     {
         auto c = rCorrCard.reduced (10, 9);
-        //  v0.8.1 (TEST) : plus de commutateur PITCH CORRECTION.
-        (void) c.removeFromTop (24);
-
-        c.removeFromTop (6);
+        //  v0.8.1 : plus de commutateur PITCH CORRECTION. La carte ne contient
+        //  plus que VIBRATO et RATE ; on centre le bloc verticalement au lieu de
+        //  laisser la place vide qu'occupait le commutateur.
+        constexpr int kKnobBlockH = 12 + 48 + 12;
+        c.removeFromTop (std::max (0, (c.getHeight() - kKnobBlockH) / 2));
         auto knobs = c;
 
         auto left1 = knobs.removeFromLeft (knobs.getWidth() / 2);
