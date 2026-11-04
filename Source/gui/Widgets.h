@@ -1,8 +1,5 @@
-//  Widgets.h — tous les composants dessinés à la main de HardTune.
-//
-//  Tout est dessiné en code (aucune image) pour que l'interface reste identique
-//  sur Windows et Linux, et pour que le mode Light/Dark soit un simple
-//  changement de palette.
+//  Widgets.h — composants dessinés à la main de HardTune (interface paysage 1408x768,
+//  fidèle à la maquette validée pixel par pixel contre la référence).
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -12,13 +9,12 @@
 #include <cmath>
 
 #include "Theme.h"
-#include "../Diag.h"
 
 namespace ht
 {
 
 // ---------------------------------------------------------------------------
-//  Bouton rond (270°, sans aiguille, ventre sombre)
+//  Bouton rond : anneau 270° (quart du bas ouvert), ventre charbon, index à l'arc.
 // ---------------------------------------------------------------------------
 class Knob : public juce::Slider
 {
@@ -35,66 +31,64 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:knob");
-    try
-    {
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
-
-        if (d < 8.0f)      // composant de taille nulle/absurde : rien a dessiner
-            return;
-
-        const float sw = juce::jmax (5.0f, d * 0.105f);
-        const float R  = d * 0.5f - sw * 0.5f - 1.0f;
+        if (d < 24.0f) return;
+        const float ring = d * 0.115f;
+        const float R    = d * 0.5f;
+        const float bodyR = R - ring * 0.5f - 1.0f;
         const auto  c  = b.getCentre();
 
-        // piste 270°
+        const double range = juce::jmax (1.0e-9, getMaximum() - getMinimum());
+        const double frac  = juce::jlimit (0.0, 1.0, (getValue() - getMinimum()) / range);
+
+        // piste 270° : de 135° à 405° (0° = droite, positif vers le bas)
         juce::Path track;
         track.addCentredArc (c.x, c.y, R, R, 0.0f,
-                             juce::degreesToRadians (-135.0f),
-                             juce::degreesToRadians (270.0f), true);
+                             juce::degreesToRadians (135.0f),
+                             juce::degreesToRadians (405.0f), true);
         g.setColour (pal.ringTrack);
-        g.strokePath (track, juce::PathStrokeType (sw, juce::PathStrokeType::curved,
+        g.strokePath (track, juce::PathStrokeType (ring, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::butt));
 
         // arc de valeur
-        const double range = juce::jmax (1.0e-9, getMaximum() - getMinimum());
-        const double frac  = juce::jlimit (0.0, 1.0, (getValue() - getMinimum()) / range);
+        const float a1 = 135.0f + 270.0f * (float) frac;
         if (frac > 0.001)
         {
             juce::Path val;
             val.addCentredArc (c.x, c.y, R, R, 0.0f,
-                               juce::degreesToRadians (-135.0f),
-                               juce::degreesToRadians ((float) (270.0 * frac)), true);
+                               juce::degreesToRadians (135.0f),
+                               juce::degreesToRadians (a1), true);
             juce::ColourGradient grad (pal.accentLight, c.x - R, c.y - R,
                                        pal.accentDark,  c.x + R, c.y + R, false);
             g.setGradientFill (grad);
-            g.strokePath (val, juce::PathStrokeType (sw, juce::PathStrokeType::curved,
+            g.strokePath (val, juce::PathStrokeType (ring, juce::PathStrokeType::curved,
                                                      juce::PathStrokeType::butt));
         }
 
-        // ventre du bouton (sombre, comme validé sur la maquette)
-        const float Rf = R - sw * 0.5f - 2.0f;
-        auto face = juce::Rectangle<float> (Rf * 2.0f, Rf * 2.0f).withCentre (c);
-        juce::ColourGradient fg (pal.knobFace1, c.x - Rf * 0.35f, c.y - Rf * 0.45f,
-                                 pal.knobFace2, c.x + Rf * 0.35f, c.y + Rf * 0.55f, true);
+        // ventre charbon
+        auto face = juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c);
+        juce::ColourGradient fg (pal.knobFace1, c.x - bodyR * 0.35f, c.y - bodyR * 0.45f,
+                                 pal.knobFace2, c.x + bodyR * 0.35f, c.y + bodyR * 0.55f, true);
         g.setGradientFill (fg);
         g.fillEllipse (face);
         g.setColour (pal.knobEdge);
         g.drawEllipse (face, 1.0f);
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:knob");
+
+        // index à la fin de l'arc
+        const float ar = juce::degreesToRadians (a1);
+        const float ix = c.x + std::cos (ar) * R;
+        const float iy = c.y + std::sin (ar) * R;
+        g.setColour (pal.index);
+        g.fillEllipse (ix - ring * 0.30f, iy - ring * 0.30f, ring * 0.60f, ring * 0.60f);
     }
-}
 
 private:
     Palette pal = lightPalette();
 };
 
 // ---------------------------------------------------------------------------
-//  Barre coulissante (FORMANT, TRANSPOSE) — valeur -1 .. +1, repère au centre
+//  Barre coulissante horizontale (FORMANT grisée, TRANSPOSE bleue).
 // ---------------------------------------------------------------------------
 class BarControl : public juce::Slider
 {
@@ -108,60 +102,54 @@ public:
     }
 
     void setPalette (const Palette& p) { pal = p; repaint(); }
+    void setEnabled2 (bool e) { enabled2 = e; setEnabled (e); repaint(); }
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:barre");
-    try
-    {
         auto b = getLocalBounds().toFloat();
-        const float h = 12.0f;
+        if (b.getWidth() < 16.0f || b.getHeight() < 6.0f) return;
+        const float h = 6.0f;
         auto track = juce::Rectangle<float> (b.getX(), b.getCentreY() - h * 0.5f,
                                              b.getWidth(), h);
-
-        g.setColour (pal.barTrack);
+        // piste toujours grise (comme la référence)
+        g.setColour (enabled2 ? pal.barTrack : juce::Colour (0xffe3e9ec));
         g.fillRoundedRectangle (track, h * 0.5f);
-
-        // repère du milieu
-        g.setColour (pal.accent.withAlpha (0.35f));
-        g.fillRect (juce::Rectangle<float> (track.getCentreX(), track.getY() + 2.0f, 1.0f, h - 4.0f));
 
         const double frac = juce::jlimit (0.0, 1.0, (getValue() - getMinimum())
                                                     / juce::jmax (1.0e-9, getMaximum() - getMinimum()));
         const float x = track.getX() + track.getWidth() * (float) frac;
-        const float mid = track.getCentreX();
-
-        juce::Rectangle<float> fill (juce::jmin (mid, x), track.getY(),
-                                     std::abs (x - mid), h);
-        if (fill.getWidth() > 0.5f)
-        {
-            juce::ColourGradient grad (pal.barFill1, fill.getX(), 0.0f,
-                                       pal.barFill2, fill.getRight(), 0.0f, false);
-            g.setGradientFill (grad);
-            g.fillRoundedRectangle (fill, h * 0.5f);
-        }
 
         // poignée
         const float kd = 22.0f;
         juce::Rectangle<float> knob (kd, kd);
         knob.setCentre (x, track.getCentreY());
-        g.setColour (juce::Colours::white);
-        g.fillEllipse (knob);
-        g.setColour (pal.accentDark);
-        g.drawEllipse (knob, 1.6f);
+        if (enabled2)
+        {
+            juce::ColourGradient kg (juce::Colour (0xff3fb3e0), knob.getX(), knob.getY(),
+                                     juce::Colour (0xff14618f), knob.getRight(), knob.getBottom(), false);
+            g.setGradientFill (kg);
+            g.fillEllipse (knob);
+            g.setColour (juce::Colour (0xff0e5d8a));
+            g.drawEllipse (knob, 1.0f);
         }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:barre");
+        else
+        {
+            juce::ColourGradient kg (juce::Colours::white, knob.getX(), knob.getY(),
+                                     juce::Colour (0xffdfe8ee), knob.getRight(), knob.getBottom(), false);
+            g.setGradientFill (kg);
+            g.fillEllipse (knob);
+            g.setColour (juce::Colour (0xffb9c4cb));
+            g.drawEllipse (knob, 1.0f);
+        }
     }
-}
 
 private:
     Palette pal = lightPalette();
+    bool enabled2 = true;
 };
 
 // ---------------------------------------------------------------------------
-//  Interrupteur à glissière (BYPASS, LIGHT/DARK, PITCH CORRECTION)
+//  Interrupteur à glissière (LIGHT, BYPASS).
 // ---------------------------------------------------------------------------
 class PillSwitch : public juce::Button
 {
@@ -172,40 +160,36 @@ public:
     }
 
     void setPalette (const Palette& p) { pal = p; repaint(); }
-    void setCompact (bool c) { compact = c; resized(); }
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        ht::diag::stage ("paint:interrupteur");
-    try
-    {
         auto b = getLocalBounds().toFloat().reduced (0.5f);
+        if (b.getWidth() < 8.0f || b.getHeight() < 6.0f) return;
         const float r = b.getHeight() * 0.5f;
-
         const bool on = getToggleState();
         if (on)
         {
-            juce::ColourGradient grad (pal.accent, 0.0f, b.getY(),
-                                       pal.accentDark, 0.0f, b.getBottom(), false);
+            // bleu profond mesuré sur la référence : #066ac0
+            juce::ColourGradient grad (juce::Colour (0xff0d78c8), 0.0f, b.getY(),
+                                       juce::Colour (0xff055da6), 0.0f, b.getBottom(), false);
             g.setGradientFill (grad);
             g.fillRoundedRectangle (b, r);
-            g.setColour (pal.accentDark);
+            g.setColour (juce::Colour (0xff044e8c));
             g.drawRoundedRectangle (b, r, 1.0f);
         }
         else
         {
-            g.setColour (pal.dark ? pal.card1.brighter (0.10f) : juce::Colour (0xffdfe9f1));
+            // gris mesuré sur la référence : #b3b8bc
+            g.setColour (juce::Colour (0xffb3b8bc));
             g.fillRoundedRectangle (b, r);
-            g.setColour (pal.dark ? pal.cardEdge : juce::Colour (0xffc9d8e4));
+            g.setColour (juce::Colour (0xff9aa4ab));
             g.drawRoundedRectangle (b, r, 1.0f);
         }
-
         if (over)
         {
             g.setColour (juce::Colours::white.withAlpha (0.12f));
             g.fillRoundedRectangle (b, r);
         }
-
         const float kd = b.getHeight() - 6.0f;
         juce::Rectangle<float> knob (kd, kd);
         knob.setCentre (on ? b.getRight() - kd * 0.5f - 3.0f : b.getX() + kd * 0.5f + 3.0f,
@@ -214,318 +198,351 @@ public:
                                  juce::Colour (0xffdde8f0), knob.getRight(), knob.getBottom(), false);
         g.setGradientFill (kg);
         g.fillEllipse (knob);
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:interrupteur");
     }
-}
 
 private:
     Palette pal = lightPalette();
-    bool compact = false;
 };
 
 // ---------------------------------------------------------------------------
-//  Le piano : 12 touches de même taille. Couleurs FIXES (jamais de thème).
+//  Piano 3 octaves (21 blanches + noires), couleurs FIXES comme la référence :
+//  blanches #fbfcfb, noires #000 avec fondu intérieur sur les côtés et en bas.
+//  Les notes de la gamme sont surlignées (noires en bleu, bande translucide).
 // ---------------------------------------------------------------------------
 class KeyStrip : public juce::Component
 {
 public:
-    void setState (int targetMidi, bool playing, int keyIndex, unsigned scaleMask)
+    void setScale (int keyIndex, unsigned scaleMask, bool minor)
     {
-        target = targetMidi;
-        voiced = playing;
-        key    = keyIndex;
-        mask   = scaleMask;
+        key = keyIndex; mask = scaleMask; isMinor = minor;
         repaint();
+    }
+
+    void setPlaying (int targetMidi, bool voiced)
+    {
+        target = targetMidi; playing = voiced;
+        repaint();
+    }
+
+    static juce::String nameFor (int pc, bool minor)
+    {
+        static const char* sharp[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
+        static const char* flat [12] = { "C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B" };
+        return juce::String ((minor ? flat : sharp)[((pc % 12) + 12) % 12]);
     }
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:clavier");
-    try
-    {
         auto r = getLocalBounds().toFloat();
-        if (r.getWidth() < 12.0f || r.getHeight() < 12.0f)
-            return;
+        if (r.getWidth() < 60.0f || r.getHeight() < 40.0f) return;
+        const int nWhite = 21;
+        const float w = r.getWidth() / (float) nWhite;
+        const float blackH = r.getHeight() * (70.0f / 106.0f);
+        const float blackW = w * 0.56f;
+        static const int blackAfter[5] = { 0, 1, 3, 4, 5 };
 
-        const int n = 12;
-        const float w = r.getWidth() / (float) n;
-
-        auto isBlack = [] (int c)
+        // blanches
+        for (int i = 0; i < nWhite; ++i)
         {
-            return c == 1 || c == 3 || c == 6 || c == 8 || c == 10;
-        };
-
-        for (int i = 0; i < n; ++i)
+            juce::Rectangle<float> kr (r.getX() + w * i, r.getY(), w, r.getHeight());
+            g.setColour (juce::Colour (0xfffbfcfb));
+            g.fillRect (kr);
+            g.setColour (juce::Colour (0xff1d2a33));
+            g.drawLine (kr.getRight(), kr.getY(), kr.getRight(), kr.getBottom(), 1.5f);
+            g.drawLine (kr.getX(), kr.getBottom(), kr.getRight(), kr.getBottom(), 1.5f);
+        }
+        // bande translucide sur les blanches de la gamme
+        for (int i = 0; i < nWhite; ++i)
         {
-            juce::Rectangle<float> keyRect (r.getX() + w * (float) i + 1.0f, r.getY(),
-                                            w - 2.0f, r.getHeight());
-            const bool isPlaying = voiced && target >= 0
-                                   && ((target - key) % 12 + 12) % 12 == i;
-            const bool inScale = ((mask >> ((i - key + 12) % 12)) & 1u) != 0u;
-
-            juce::Colour c1, c2, txt;
-            if (isPlaying)      { c1 = juce::Colour (0xffa6e2fa); c2 = juce::Colour (0xff4aa3d8); txt = juce::Colours::white; }
-            else if (isBlack (i)) { c1 = juce::Colour (0xff3d586f); c2 = juce::Colour (0xff22374b); txt = juce::Colour (0xffdbeaf5); }
-            else                { c1 = juce::Colours::white;        c2 = juce::Colour (0xffeef7fd); txt = juce::Colour (0xff5b8098); }
-
-            juce::ColourGradient grad (c1, 0.0f, keyRect.getY(), c2, 0.0f, keyRect.getBottom(), false);
-            g.setGradientFill (grad);
-            g.fillRoundedRectangle (keyRect, 5.0f);
-            g.setColour (juce::Colour (0xffcfe2f0));
-            g.drawRoundedRectangle (keyRect, 5.0f, 1.0f);
-
-            g.setColour (txt);
-            g.setFont (font (16.5f));
-            g.drawText (juce::String (nameFor (i)),
-                        keyRect.withTrimmedBottom (30.0f).toNearestInt(),
-                        juce::Justification::centredBottom, false);
-
-            if (inScale && ! isPlaying)
+            const int pcWhite = whitePC (i);
+            if (inScale (pcWhite))
             {
-                g.setColour (juce::Colour (0xff5fb6e2).withAlpha (0.85f));
-                g.fillEllipse (keyRect.getCentreX() - 4.6f, keyRect.getBottom() - 22.0f, 9.2f, 9.2f);
+                juce::Rectangle<float> kr (r.getX() + w * i + 1, r.getY() + 1,
+                                           w - 1, r.getHeight() - 1);
+                g.setColour (juce::Colour (0x4c2aa6d8)); // rgba(42,166,216,.30)
+                g.fillRect (kr);
             }
         }
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:clavier");
-    }
-}
-
-    static juce::String nameFor (int i)
-    {
-        static const char* names[12] = { "C", "C#", "D", "D#", "E", "F",
-                                         "F#", "G", "G#", "A", "A#", "B" };
-        return juce::String (names[((i % 12) + 12) % 12]);
+        // noires
+        for (int oct = 0; oct < 3; ++oct)
+            for (int k = 0; k < 5; ++k)
+            {
+                const int i = oct * 7 + blackAfter[k];
+                if (i + 1 >= nWhite) continue;
+                // v0.9 : classe de hauteur ABSOLUE, comme les blanches et comme
+                // tune::NoteMapper::scaleMask(). Avant, on ajoutait `key` ici et pas
+                // sur les blanches : les deux moities du clavier se contredisaient.
+                const int pc = (whitePC (blackAfter[k]) + 1) % 12;
+                const float x = r.getX() + (i + 1) * w - blackW * 0.5f;
+                const bool hot = inScale (pc);
+                const bool isPlaying = playing && target >= 0 && (target % 12) == pc;
+                juce::Rectangle<float> kr (x, r.getY(), blackW, blackH);
+                if (hot || isPlaying)
+                {
+                    juce::ColourGradient grad (juce::Colour (0xff8fe0f7), 0, kr.getY(),
+                                               juce::Colour (0xff1f8ec5), 0, kr.getBottom(), false);
+                    g.setGradientFill (grad);
+                    g.fillRoundedRectangle (kr, 4.0f);
+                }
+                else
+                {
+                    // noir pur + fondu intérieur sur les côtés et en bas (mesuré sur la réf)
+                    g.setColour (juce::Colours::black);
+                    g.fillRect (kr);
+                    juce::ColourGradient gl (juce::Colour (0x33ffffff), kr.getX(), 0,
+                                             juce::Colours::transparentWhite, kr.getX() + 3.5f, 0, false);
+                    g.setGradientFill (gl); g.fillRect (kr.withWidth (3.5f));
+                    juce::ColourGradient gr (juce::Colours::transparentWhite, kr.getRight() - 3.5f, 0,
+                                             juce::Colour (0x33ffffff), kr.getRight(), 0, false);
+                    g.setGradientFill (gr); g.fillRect (kr.withTrimmedLeft (kr.getWidth() - 3.5f));
+                    juce::ColourGradient gb (juce::Colours::transparentBlack, kr.getX(), kr.getBottom() - 4,
+                                             juce::Colour (0x99ffffff), kr.getX(), kr.getBottom(), false);
+                    g.setGradientFill (gb); g.fillRect (kr.withTrimmedTop (kr.getHeight() - 4));
+                }
+            }
     }
 
 private:
-    int target = -1, key = 0;
+    static int whitePC (int i) { static const int p[7] = {0,2,4,5,7,9,11}; return p[i % 7]; }
+    //  Le masque vient de tune::NoteMapper::scaleMask() : bit n = classe de
+    //  hauteur n (0 = do). Il ne doit donc PAS etre decale par la tonalite.
+    bool inScale (int pc) const { return ((mask >> (((pc % 12) + 12) % 12)) & 1u) != 0u; }
+
+    int key = 0;
     unsigned mask = 0xfffu;
-    bool voiced = false;
+    bool isMinor = false;
+    int target = -1;
+    bool playing = false;
 };
 
 // ---------------------------------------------------------------------------
-//  Le grand cadran (Ø350) : arc, graduations, valeur au centre
+//  Cadran à aiguille (jauge de pitch) — arc lumineux 142°..398°, 26 graduations.
 // ---------------------------------------------------------------------------
 class Gauge : public juce::Component
 {
 public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
 
-    void setData (float cents, bool isVoiced, int targetNote)
+    void setData (float cents, int targetNote, bool minor)
     {
-        if (std::abs (cents - value) > 0.05f || isVoiced != voiced || targetNote != target)
-        {
-            value = cents; voiced = isVoiced; target = targetNote;
-            repaint();
-        }
+        value = cents; target = targetNote; isMinor = minor;
+        repaint();
     }
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:cadran");
-    try
-    {
         auto b = getLocalBounds().toFloat();
-        const float d  = juce::jmin (b.getWidth(), b.getHeight());
+        const float d = juce::jmin (b.getWidth(), b.getHeight());
+        if (d < 60.0f) return;
+        const auto c = b.getCentre();
+        const float th = d * 0.075f;
+        const float R  = d * 0.5f - th * 0.5f - 2.0f;
+        const float a0 = juce::degreesToRadians (142.0f);
+        const float a1 = juce::degreesToRadians (398.0f);
 
-        if (d < 16.0f)     // taille nulle -> rayon negatif et police de hauteur 0
-            return;
-
-        const float sw = d * 0.085f;
-        const float R  = d * 0.5f - sw * 0.5f - 16.0f;
-        const auto  c  = b.getCentre();
-
-        // Anneau pointille « technique » : des petits disques dessines un par un.
-        // Avant, on passait par PathStrokeType::createDashedStroke + fillPath
-        // (code interne de JUCE, appele 30 fois par seconde et alimentait le
-        // remplissage de chemins). Visuellement identique, sans ce detour.
+        // halo lumineux
         {
-            const float rDots = R + sw * 0.5f + 12.0f;
-
-            g.setColour (pal.accent.withAlpha (0.45f));
-
-            for (int k = 0; k < 72; ++k)
-            {
-                if ((k % 4) == 3)
-                    continue;                       // le « tiret » de 11 px : un trou
-
-                const float a = juce::degreesToRadians (-120.0f + 240.0f * (float) k / 71.0f);
-                g.fillEllipse (c.x + std::cos (a) * rDots - 0.9f,
-                               c.y + std::sin (a) * rDots - 0.9f,
-                               1.8f, 1.8f);
-            }
+            juce::Path halo;
+            halo.addCentredArc (c.x, c.y, R, R, 0.0f, a0, a1, true);
+            g.setColour (pal.glow);
+            g.strokePath (halo, juce::PathStrokeType (th * 1.9f, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
         }
-
-        // ventre
-        auto face = juce::Rectangle<float> (R - sw * 0.5f - 3.0f, R - sw * 0.5f - 3.0f);
-        face = face.withSizeKeepingCentre (face.getWidth() * 2.0f, face.getHeight() * 2.0f).withCentre (c);
-        juce::ColourGradient fg (pal.dialFace1, c.x, c.y - face.getHeight() * 0.4f,
-                                 pal.dialFace2, c.x, c.y + face.getHeight() * 0.6f, false);
-        g.setGradientFill (fg);
-        g.fillEllipse (face);
-
-        // piste
-        juce::Path track;
-        track.addCentredArc (c.x, c.y, R, R, 0.0f, juce::degreesToRadians (-120.0f),
-                             juce::degreesToRadians (240.0f), true);
-        g.setColour (pal.ringTrack);
-        g.strokePath (track, juce::PathStrokeType (sw, juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::butt));
-
-        // arc de valeur : 0 cent = en haut, ±50 cents = ±120°
-        const float clamped = juce::jlimit (-50.0f, 50.0f, value);
-        const float angle   = clamped / 50.0f * 120.0f;
-        if (std::abs (angle) > 0.4f)
+        // anneau dégradé
         {
-            juce::Path arc;
-            const float from = juce::jmin (0.0f, angle);
-            const float to   = juce::jmax (0.0f, angle);
-            arc.addCentredArc (c.x, c.y, R, R, 0.0f,
-                               juce::degreesToRadians (from - 90.0f),
-                               juce::degreesToRadians (to - from), true);
-            juce::ColourGradient grad (pal.accentLight, c.x - R, c.y - R,
-                                       pal.accentDark,  c.x + R, c.y + R, false);
+            juce::Path ring;
+            ring.addCentredArc (c.x, c.y, R, R, 0.0f, a0, a1, true);
+            juce::ColourGradient grad (juce::Colour (0xff8fe6f2), c.x - R, c.y - R,
+                                       juce::Colour (0xff14618f), c.x + R, c.y + R, false);
             g.setGradientFill (grad);
-            g.strokePath (arc, juce::PathStrokeType (sw, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::butt));
+            g.strokePath (ring, juce::PathStrokeType (th, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::butt));
         }
-
         // graduations
-        for (int k = -50; k <= 50; k += 10)
+        for (int i = 0; i <= 25; ++i)
         {
-            const bool major = (k % 50) == 0;
-            const float a = juce::degreesToRadians ((float) k / 50.0f * 120.0f - 90.0f);
-            const float r1 = R - sw * 0.5f - 2.0f;
-            const float r2 = r1 - (major ? 10.0f : 6.0f);
-            g.setColour (major ? pal.ink : pal.inkFaint.withAlpha (0.75f));
+            const float a = a0 + (a1 - a0) * i / 25.0f;
+            const bool major = (i % 5) == 0;
+            const float r1 = R - th * 0.5f - 2.0f;
+            const float r2 = r1 - (major ? d * 0.035f : d * 0.020f);
+            g.setColour (major ? juce::Colour (0xff3a4a55) : juce::Colour (0xff8fa3ae));
             g.drawLine (c.x + std::cos (a) * r1, c.y + std::sin (a) * r1,
-                        c.x + std::cos (a) * r2, c.y + std::sin (a) * r2, major ? 2.2f : 1.4f);
+                        c.x + std::cos (a) * r2, c.y + std::sin (a) * r2, major ? 2.0f : 1.2f);
         }
+        // aiguille : 0 = droite, positif vers le bas ; ±50 cents -> ±128°
+        const float clamped = juce::jlimit (-50.0f, 50.0f, value);
+        const float ang = juce::degreesToRadians (clamped / 50.0f * 128.0f);
+        const float L = R - th * 0.95f;
+        const float tail = L * 0.22f;
+        g.setColour (juce::Colour (0x4015588a));
+        g.drawLine (c.x - std::cos (ang) * tail, c.y - std::sin (ang) * tail,
+                    c.x + std::cos (ang) * L, c.y + std::sin (ang) * L, d * 0.045f);
+        g.setColour (juce::Colour (0xff17537f));
+        g.drawLine (c.x - std::cos (ang) * tail, c.y - std::sin (ang) * tail,
+                    c.x + std::cos (ang) * L, c.y + std::sin (ang) * L, d * 0.026f);
+        // pivot charbon
+        g.setColour (juce::Colour (0xff333d45));
+        g.fillEllipse (c.x - d * 0.072f, c.y - d * 0.072f, d * 0.144f, d * 0.144f);
+        g.setColour (juce::Colour (0x66ffffff));
+        g.fillEllipse (c.x - d * 0.064f, c.y - d * 0.072f, d * 0.10f, d * 0.10f);
 
-        // valeur au centre
-        g.setColour (pal.ink);
-        const int  shown = (int) std::lround (value);
-        g.setFont (font (d * 0.165f));
-        g.drawText ((shown > 0 ? "+" : "") + juce::String (shown),
-                    getLocalBounds().reduced (0, (int) (d * 0.06f)),
+        // note (nom selon la gamme : # en majeur, b en mineur) + cents
+        g.setColour (juce::Colour (0xff154f79));
+        g.setFont (font (d * 0.132f, true));
+        g.drawText (target >= 0 ? KeyStrip::nameFor (target % 12, isMinor)
+                                 + juce::String (target / 12 - 1) : "--",
+                    juce::Rectangle<float> (c.x - d * 0.30f, c.y + d * 0.16f, d * 0.60f, d * 0.20f),
                     juce::Justification::centred, false);
-        g.setFont (font (d * 0.068f));
-        g.setColour (pal.inkSoft);
-        g.drawText (juce::String::fromUTF8 ("\xc2\xa2"),
-                    getLocalBounds().withTrimmedTop ((int) (d * 0.30f)),
-                    juce::Justification::centredTop, false);
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:cadran");
+        g.setColour (juce::Colour (0xff16242e));
+        g.setFont (font (d * 0.070f));
+        const int cv = (int) std::lround (value);
+        g.drawText ((cv > 0 ? "+" : "") + juce::String (cv),
+                    juce::Rectangle<float> (c.x + d * 0.10f, c.y - d * 0.06f, d * 0.28f, d * 0.14f),
+                    juce::Justification::centredLeft, false);
     }
-}
 
 private:
     Palette pal = lightPalette();
     float value = 0.0f;
-    bool  voiced = false;
-    int   target = -1;
+    int target = -1;
+    bool isMinor = false;
 };
 
 // ---------------------------------------------------------------------------
-//  Forme d'onde + courbe de hauteur
+//  WAVEFORM · PITCH : fenêtre de 5 secondes, axe 0s..5s, courbe de pitch.
+//  Si le signal touche le plafond (saturation), la partie collée en haut
+//  reste droite et passe au ROUGE (bascule nette, comme le CPU de FL Studio).
 // ---------------------------------------------------------------------------
 class Scope : public juce::Component
 {
 public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
 
-    void setData (const float* s, int n, const float* cts, int nc)
+    /** `cols` = nombre de colonnes (largeur du cadre). Fenêtre fixe de 5 s. */
+    void pushBlock (const float* s, int n, int sampleRate)
     {
-        const int keep = juce::jmin (n, (int) samples.size());
-        std::copy (s + (n - keep), s + n, samples.begin());
-        const int keepC = juce::jmin (nc, (int) cents.size());
-        std::copy (cts + (nc - keepC), cts + nc, cents.begin());
+        const int cols = (int) colMin.size();
+        const int perCol = juce::jmax (1, (int) (5.0 * sampleRate / cols)); // fenêtre 5 s
+        for (int i = 0; i < n; ++i)
+        {
+            const float a = s[i];
+            colMin[(size_t) cursor] = pos == 0 ? a : juce::jmin (colMin[(size_t) cursor], a);
+            colMax[(size_t) cursor] = pos == 0 ? a : juce::jmax (colMax[(size_t) cursor], a);
+            if (++pos >= perCol)
+            {
+                pos = 0;
+                cursor = (cursor + 1) % cols;
+            }
+        }
+        repaint();
+    }
+
+    void resetWindow()
+    {
+        colMin.fill (0.0f); colMax.fill (0.0f);
+        cursor = 0; pos = 0;
         repaint();
     }
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:oscilloscope");
-    try
-    {
         auto b = getLocalBounds().toFloat();
-        if (b.getWidth() < 8.0f || b.getHeight() < 8.0f)
-            return;
+        if (b.getWidth() < 16.0f || b.getHeight() < 16.0f) return;
+        const float pad = 16.0f;
+        auto frame = b.reduced (pad, 14.0f).removeFromBottom (24.0f); // place pour l'axe du temps
+        const float mid = frame.getCentreY();
+        const float amp = frame.getHeight() * 0.47f;
+        const int cols = (int) colMin.size();
 
-        g.setColour (pal.dark ? pal.card2 : juce::Colour (0xfff7fbfe));
-        g.fillRoundedRectangle (b, 9.0f);
-        g.setColour (pal.cardEdge.withAlpha (0.8f));
-        g.drawRoundedRectangle (b, 9.0f, 1.0f);
+        // fond dégradé cyan -> bleu (mesuré sur la référence)
+        juce::ColourGradient bg (juce::Colour (0xffb5e7ea), frame.getX(), 0,
+                                 juce::Colour (0xffb7d0e6), frame.getRight(), 0, false);
+        g.setGradientFill (bg);
+        g.fillRoundedRectangle (frame, 8.0f);
 
-        // grille
-        g.setColour (pal.dark ? juce::Colour (0xff20303c) : juce::Colour (0xffeaf3fa));
-        for (int i = 1; i < 6; ++i)
-            g.drawVerticalLine ((int) (b.getX() + b.getWidth() * i / 6.0f), b.getY() + 2, b.getBottom() - 2);
-        for (int i = 1; i < 4; ++i)
-            g.drawHorizontalLine ((int) (b.getY() + b.getHeight() * i / 4.0f), b.getX() + 2, b.getRight() - 2);
+        // grille : 1 graduation par seconde (0..5 s) + lignes horizontales
+        g.setColour (juce::Colour (0xff465055).withAlpha (0.20f));
+        for (int i = 1; i < 5; ++i)
+            g.drawVerticalLine ((int) (frame.getX() + frame.getWidth() * i / 5.0f),
+                                frame.getY(), frame.getBottom());
+        g.setColour (juce::Colour (0xff537576).withAlpha (0.50f));
+        g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.25f), frame.getX(), frame.getRight());
+        g.drawHorizontalLine ((int) (frame.getY() + frame.getHeight() * 0.75f), frame.getX(), frame.getRight());
+        // ligne zéro
+        g.setColour (juce::Colour (0xff3f6a7c));
+        g.drawHorizontalLine ((int) mid, frame.getX(), frame.getRight(), 1.1f);
 
-        const float mid = b.getCentreY();
-        const int   n   = (int) samples.size();
-
-        // bande « zone juste »
-        g.setColour (pal.accent.withAlpha (0.13f));
-        g.fillRect (juce::Rectangle<float> (b.getX(), mid - b.getHeight() * 0.06f,
-                                            b.getWidth(), b.getHeight() * 0.12f));
-
-        // forme d'onde
-        g.setColour (pal.accent.withAlpha (0.75f));
-        const float stepX = b.getWidth() / (float) n;
-        for (int i = 0; i < n; ++i)
+        // courbe : min/max par colonne
+        juce::Path wave, sat;
+        bool started = false, satStarted = false;
+        const float ceilY = frame.getY() + 2.4f;
+        for (int i = 0; i < cols; ++i)
         {
-            const float a = juce::jlimit (0.0f, 1.0f, std::abs (samples[(size_t) i])) * b.getHeight() * 0.44f;
-            if (a < 0.7f) continue;
-            g.drawVerticalLine ((int) (b.getX() + stepX * (float) i), mid - a, mid + a);
+            const float x = frame.getX() + frame.getWidth() * (i + 0.5f) / cols;
+            float yTop = mid - colMax[(size_t) i] * amp;
+            float yBot = mid - colMin[(size_t) i] * amp;
+            const bool clipped = colMax[(size_t) i] >= 0.999f || colMin[(size_t) i] <= -0.999f;
+            if (clipped) { yTop = juce::jmin (yTop, ceilY); yBot = juce::jmax (yBot, frame.getBottom() - 2.4f); }
+            if (! started) { wave.startNewSubPath (x, yTop); started = true; }
+            wave.lineTo (x, yTop);
+            wave.lineTo (x, yBot);
+            if (clipped)
+            {
+                if (! satStarted) { sat.startNewSubPath (x, ceilY); satStarted = true; }
+                else sat.lineTo (x, ceilY);
+            }
+            else if (satStarted) { satStarted = false; }
+        }
+        g.setColour (juce::Colour (0xff22638f));
+        g.strokePath (wave, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+        // partie saturée : droite, collée au plafond, ROUGE
+        if (satStarted)
+        {
+            g.setColour (juce::Colour (0x66d02a1e));
+            g.strokePath (sat, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::rounded));
+            g.setColour (juce::Colour (0xffd02a1e));
+            g.strokePath (sat, juce::PathStrokeType (3.4f, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::rounded));
         }
 
-        // courbe de hauteur (cents -> pixels)
-        juce::Path curve;
-        const int nc = (int) cents.size();
-        bool started = false;
-        for (int i = 0; i < nc; ++i)
+        // contour du cadre
+        g.setColour (juce::Colour (0xff9dacae));
+        g.drawRoundedRectangle (frame, 8.0f, 1.0f);
+
+        // axe du temps : 0s -> 5s, une graduation par seconde
+        g.setFont (font (15.0f));
+        g.setColour (juce::Colour (0xff4a6875));
+        for (int i = 0; i <= 5; ++i)
         {
-            const float x = b.getX() + b.getWidth() * (float) i / (float) juce::jmax (1, nc - 1);
-            const float y = mid - juce::jlimit (-50.0f, 50.0f, cents[(size_t) i]) / 50.0f
-                                  * b.getHeight() * 0.30f;
-            if (! started) { curve.startNewSubPath (x, y); started = true; }
-            else           curve.lineTo (x, y);
+            const float x = frame.getX() + frame.getWidth() * i / 5.0f;
+            g.drawLine (x, frame.getBottom(), x, frame.getBottom() + 5.0f, 1.0f);
+            auto just = i == 0 ? juce::Justification::left
+                     : i == 5 ? juce::Justification::right
+                              : juce::Justification::centred;
+            g.drawText (juce::String (i) + "s",
+                        juce::Rectangle<float> (x - 20, frame.getBottom() + 7, 40, 16),
+                        just, false);
         }
-        g.setColour (pal.accentDark);
-        g.strokePath (curve, juce::PathStrokeType (2.4f,
-                       juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:oscilloscope");
     }
-}
 
 private:
     Palette pal = lightPalette();
-    std::array<float, 512> samples {};
-    std::array<float, 256> cents {};
+    static constexpr int kCols = 731;
+    std::array<float, kCols> colMin {}, colMax {};
+    int cursor = 0;
+    int pos = 0;
 };
 
 // ---------------------------------------------------------------------------
-//  Vu-mètre (Peak + RMS)
+//  Vu-mètre segmenté (2 colonnes de 12 segments, remplissage depuis le bas,
+//  bleu foncé en bas -> cyan vers le niveau, comme la référence).
 // ---------------------------------------------------------------------------
 class LevelMeter : public juce::Component
 {
 public:
     void setPalette (const Palette& p) { pal = p; repaint(); }
-    void setTitle (const juce::String& t) { title = t; repaint(); }
 
     void setLevels (float peakDb, float rmsDb)
     {
@@ -535,69 +552,42 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        ht::diag::stage ("paint:vu-metre");
-    try
-    {
-        auto b = getLocalBounds();
-        if (b.getWidth() < 24 || b.getHeight() < 24)
-            return;
+        auto b = getLocalBounds().toFloat();
+        if (b.getWidth() < 24.0f || b.getHeight() < 40.0f) return;
+        const int n = 12;
+        const float segH = 8.0f, gap = 1.6f;
+        const float colW = 30.0f, colGap = 10.0f;
+        const float totalH = n * (segH + gap);
+        const float y0 = b.getCentreY() - totalH * 0.5f;
 
-        g.setColour (pal.inkSoft);
-        g.setFont (font (11.0f, true));
-        g.drawText (title.toUpperCase(), b.removeFromTop (16), juce::Justification::centred, false);
-
-        auto foot = b.removeFromBottom (14);
-        auto scaleArea = b.removeFromLeft (22);
-
-        g.setFont (font (10.0f));
-        g.setColour (pal.inkFaint);
-        const char* labels[3] = { "0", "-12", "-24" };
-        for (int i = 0; i < 3; ++i)
+        for (int k = 0; k < 2; ++k)
         {
-            const int y = b.getY() + (int) (b.getHeight() * i / 2.0f);
-            g.drawText (labels[i], scaleArea.getX(), y - 7, scaleArea.getWidth() - 3, 14,
-                        juce::Justification::centredRight, false);
-            juce::ignoreUnused (foot);
+            const float db = k == 0 ? peak : rms;
+            const float norm = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
+            const int filled = (int) (norm * n + 0.5f);
+            const float cx = b.getX() + k * (colW + colGap);
+            for (int i = 0; i < n; ++i)
+            {
+                const bool on = i >= n - filled;      // monte depuis le bas
+                const float y = y0 + i * (segH + gap);
+                juce::Colour col;
+                if (on)
+                {
+                    const float t = (n - 1 - i) / (float) (n - 1); // 0 = bas
+                    col = t > 0.82f ? juce::Colour (0xff1f8fe0)
+                        : t > 0.62f ? juce::Colour (0xff4ec8e8)
+                        : t > 0.34f ? juce::Colour (0xff1f6fb0)
+                                    : juce::Colour (0xff17497e);
+                }
+                else col = juce::Colour (0xffc9ced3);
+                g.setColour (col);
+                g.fillRoundedRectangle (juce::Rectangle<float> (cx, y, colW, segH), segH * 0.5f);
+            }
         }
-
-        const int barW = 20, gap = 8;
-        int x = b.getX() + 4;
-        drawBar (g, juce::Rectangle<int> (x, b.getY(), barW, b.getHeight()), peak);
-        x += barW + gap;
-        drawBar (g, juce::Rectangle<int> (x, b.getY(), barW, b.getHeight()), rms);
-
-        g.setColour (pal.inkFaint);
-        g.setFont (font (10.0f));
-        auto f = getLocalBounds().removeFromBottom (14);
-        g.drawText ("PEAK", f.getX() + 22, f.getY(), 40, 14, juce::Justification::centredLeft, false);
-        g.drawText ("RMS",  f.getX() + 22 + barW + gap, f.getY(), 40, 14, juce::Justification::centredLeft, false);
-        }
-    catch (...)
-    {
-        ht::diag::logOnce ("EXCEPTION rattrapee dans paint:vu-metre");
     }
-}
 
 private:
-    void drawBar (juce::Graphics& g, juce::Rectangle<int> r, float db)
-    {
-        g.setColour (pal.meterTrack);
-        g.fillRoundedRectangle (r.toFloat(), 5.0f);
-
-        const float norm = juce::jlimit (0.0f, 1.0f, (db + 24.0f) / 24.0f);
-        if (norm > 0.01f)
-        {
-            auto fill = r.toFloat();
-            fill = fill.withTop (fill.getBottom() - fill.getHeight() * norm);
-            juce::ColourGradient grad (pal.barFill1, 0.0f, fill.getY(),
-                                       pal.barFill2, 0.0f, fill.getBottom(), false);
-            g.setGradientFill (grad);
-            g.fillRoundedRectangle (fill, 5.0f);
-        }
-    }
-
     Palette pal = lightPalette();
-    juce::String title { "Input" };
     float peak = -100.0f, rms = -100.0f;
 };
 
