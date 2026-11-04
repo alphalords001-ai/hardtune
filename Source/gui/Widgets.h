@@ -34,7 +34,9 @@ public:
         auto b = getLocalBounds().toFloat();
         const float d  = juce::jmin (b.getWidth(), b.getHeight());
         if (d < 24.0f) return;
-        const float ring = d * 0.115f;
+        //  Epaisseur reduite de 2 px par rapport a la reference : les anneaux
+        //  etaient trop gras, surtout le gros bouton RETUNE.
+        const float ring = juce::jmax (2.0f, d * 0.115f - 2.0f);
         const float R    = d * 0.5f;
         const float bodyR = R - ring * 0.5f - 1.0f;
         const auto  c  = b.getCentre();
@@ -358,7 +360,8 @@ public:
         const float d = juce::jmin (b.getWidth(), b.getHeight());
         if (d < 60.0f) return;
         const auto c = b.getCentre();
-        const float th = d * 0.075f;
+        //  idem : 2 px de moins sur l'anneau du cadran
+        const float th = juce::jmax (3.0f, d * 0.075f - 2.0f);
         const float R  = d * 0.5f - th * 0.5f - 2.0f;
         //  Graduations et aiguille en convention "0 = 3 heures" (celle de la
         //  spec) ; les arcs JUCE partent de midi -> +90 degres.
@@ -541,7 +544,12 @@ public:
 
         for (int i = 0; i < cols; ++i)
         {
-            const float mn = colMin[(size_t) i], mx = colMax[(size_t) i];
+            //  `cursor` pointe sur la colonne la plus ANCIENNE (la prochaine
+            //  ecrasee). On la place a gauche : le signal entre par la droite
+            //  et defile vers la gauche. Sans cette rotation, le trace
+            //  avancait de gauche a droite.
+            const int idx = (cursor + i) % cols;
+            const float mn = colMin[(size_t) idx], mx = colMax[(size_t) idx];
             const float x  = frame.getX() + frame.getWidth() * (i + 0.5f) / cols;
             const bool clipped = mx >= 0.999f || mn <= -0.999f;
 
