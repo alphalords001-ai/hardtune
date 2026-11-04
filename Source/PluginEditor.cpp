@@ -31,19 +31,24 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 {
     auto& apvts = proc.apvts;
 
+    //  le canevas porte le dessin et la mise a l'echelle
+    canvas.onPaint   = [this] (juce::Graphics& g) { paintCanvas (g); };
+    canvas.onResized = [this] { layoutCanvas(); };
+    addAndMakeVisible (canvas);
+
     // ---- en-tete -----------------------------------------------------------
     label (titleLabel, "ALPHA-TUNE", 34.0f, kBlue, true);
 
     label (keyCap,   "KEY",   19.0f, kInk);
     label (scaleCap, "SCALE", 19.0f, kInk);
 
-    addAndMakeVisible (keyBox);
+    canvas.addAndMakeVisible (keyBox);
     keyBox.setLookAndFeel (&pillLnf);
     keyBox.addItemList (apvts.getParameter (HardTuneProcessor::kKey)->getAllValueStrings(), 1);
     keyBox.setSelectedId (1, juce::dontSendNotification);
     keyAtt = std::make_unique<ComboAtt> (apvts, HardTuneProcessor::kKey, keyBox);
 
-    addAndMakeVisible (scaleBox);
+    canvas.addAndMakeVisible (scaleBox);
     scaleBox.setLookAndFeel (&pillLnf);
     scaleBox.addItemList (apvts.getParameter (HardTuneProcessor::kScale)->getAllValueStrings(), 1);
     scaleBox.setSelectedId (1, juce::dontSendNotification);
@@ -52,7 +57,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     label (lightCap,  "LIGHT",  19.0f, kBlue);
     label (bypassCap, "BYPASS", 19.0f, kInk);
 
-    addAndMakeVisible (lightSwitch);
+    canvas.addAndMakeVisible (lightSwitch);
     lightSwitch.setToggleState (true, juce::dontSendNotification);   // LIGHT allume = clair
     lightSwitch.onClick = [this]
     {
@@ -61,10 +66,10 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
             pm->setValueNotifyingHost (! dark);
     };
 
-    addAndMakeVisible (bypassSwitch);
+    canvas.addAndMakeVisible (bypassSwitch);
     bypassAtt = std::make_unique<ButtonAtt> (apvts, HardTuneProcessor::kBypass, bypassSwitch);
 
-    addAndMakeVisible (sizeButton);
+    canvas.addAndMakeVisible (sizeButton);
     sizeButton.setButtonText (juce::String::fromUTF8 ("\xe2\x9f\xb2"));   // ⤢
     sizeButton.setTooltip ("Size : 0.6 / 1.0 / 1.5");
     sizeButton.onClick = [this] { cycleSize(); };
@@ -74,17 +79,17 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     sizeButton.setColour (juce::TextButton::textColourOnId,   juce::Colour (0xff0e527d));
 
     // ---- clavier -----------------------------------------------------------
-    addAndMakeVisible (keys);
+    canvas.addAndMakeVisible (keys);
     label (keysCap, "KEYBOARD " + juce::String::fromUTF8 ("\xc2\xb7") + " SCALE", 19.0f, kInk);
 
     // ---- waveform ----------------------------------------------------------
     label (waveCap, "WAVEFORM " + juce::String::fromUTF8 ("\xc2\xb7") + " PITCH", 22.0f, kInk);
-    addAndMakeVisible (scope);
+    canvas.addAndMakeVisible (scope);
 
     // ---- RETUNE SPEED ------------------------------------------------------
     auto setupKnob = [&] (ht::Knob& k, const char* id)
     {
-        addAndMakeVisible (k);
+        canvas.addAndMakeVisible (k);
         return std::make_unique<SliderAtt> (apvts, id, k);
     };
 
@@ -124,18 +129,18 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     label (outPeak, "PEAK", 13.0f, kInkSoft);
     label (outPeakVal, fmtDb (-5.8f) + " " + juce::String::fromUTF8 ("\xe2\x96\xba"), 13.0f, kInkSoft);
 
-    addAndMakeVisible (meterIn);
-    addAndMakeVisible (meterOut);
-    addAndMakeVisible (gauge);
+    canvas.addAndMakeVisible (meterIn);
+    canvas.addAndMakeVisible (meterOut);
+    canvas.addAndMakeVisible (gauge);
 
     label (formantCap, "FORMANT (INACTIF)", 16.0f, juce::Colour (0xff9aa7ae));
-    addAndMakeVisible (formantBar);
+    canvas.addAndMakeVisible (formantBar);
     formantAtt = std::make_unique<SliderAtt> (apvts, HardTuneProcessor::kFormant, formantBar);
     formantBar.setEnabled2 (false);   // grise, non cliquable (§6)
 
     label (transposeCap, "TRANSPOSE", 16.0f, kInkSoft);
     label (transposeVal, "0 st", 16.0f, kValue, true);
-    addAndMakeVisible (transposeBar);
+    canvas.addAndMakeVisible (transposeBar);
     transposeAtt = std::make_unique<SliderAtt> (apvts, HardTuneProcessor::kTranspose, transposeBar);
 
     setResizable (false, false);
@@ -164,7 +169,7 @@ juce::Label& HardTuneEditor::label (juce::Label& l, const juce::String& t, float
                                     juce::Colour c, bool bold, float dx)
 {
     juce::ignoreUnused (dx);
-    addAndMakeVisible (l);
+    canvas.addAndMakeVisible (l);
     l.setText (t, juce::dontSendNotification);
     l.setFont (ht::font (size, bold));
     l.setColour (juce::Label::textColourId, c);
@@ -175,8 +180,8 @@ juce::Label& HardTuneEditor::label (juce::Label& l, const juce::String& t, float
 
 void HardTuneEditor::applyScale (double factor)
 {
-    setSize ((int) (W * factor), (int) (H * factor));
-    setTransform (juce::AffineTransform::scale ((float) factor));
+    currentScale = factor;
+    setSize ((int) (W * factor), (int) (H * factor));   // resized() place le canevas
 }
 
 void HardTuneEditor::applyTheme()
@@ -238,6 +243,12 @@ void HardTuneEditor::applyTheme()
 
 void HardTuneEditor::paint (juce::Graphics& g)
 {
+    //  Repli : si le canevas n'est pas encore place, on evite un trou noir.
+    g.fillAll (pal.win2);
+}
+
+void HardTuneEditor::paintCanvas (juce::Graphics& g)
+{
     // fond page : #c9e8f2 -> #a3d3e4 -> #84b0ce
     const juce::Colour top    = pal.win1;
     const juce::Colour bottom = pal.win2;
@@ -284,6 +295,14 @@ void HardTuneEditor::paint (juce::Graphics& g)
 }
 
 void HardTuneEditor::resized()
+{
+    //  Le canevas garde ses 1408x768 logiques et c'est SA transform qui
+    //  reduit le dessin a la taille demandee.
+    canvas.setBounds (0, 0, W, H);
+    canvas.setTransform (juce::AffineTransform::scale ((float) currentScale));
+}
+
+void HardTuneEditor::layoutCanvas()
 {
     // ---- en-tete -----------------------------------------------------------
     titleLabel .setBounds (44, 18, 260, 44);

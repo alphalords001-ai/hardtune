@@ -7,6 +7,21 @@
 #include "gui/Theme.h"
 #include "gui/Widgets.h"
 
+/**  Canevas de dessin 1408x768.
+ *   Tout l'habillage vit ici, et c'est CE composant qui porte la mise a
+ *   l'echelle. Mettre le transform sur l'editeur lui-meme ne marchait pas :
+ *   l'hote affichait la fenetre reduite sans reduire le dessin (on ne voyait
+ *   que le coin haut-gauche). Un enfant transforme, lui, est toujours respecte. */
+class HardTuneCanvas : public juce::Component
+{
+public:
+    std::function<void (juce::Graphics&)> onPaint;
+    std::function<void()> onResized;
+
+    void paint (juce::Graphics& g) override  { if (onPaint)   onPaint (g); }
+    void resized() override                  { if (onResized) onResized(); }
+};
+
 class HardTuneEditor : public juce::AudioProcessorEditor,
                        private juce::Timer
 {
@@ -14,8 +29,10 @@ public:
     explicit HardTuneEditor (HardTuneProcessor&);
     ~HardTuneEditor() override;
 
-    void paint (juce::Graphics&) override;
-    void resized() override;
+    void paint (juce::Graphics&) override;     // fond de fenetre
+    void resized() override;                   // place et echelle le canevas
+    void paintCanvas (juce::Graphics&);        // tout le dessin, en 1408x768
+    void layoutCanvas();                       // coordonnees fixes du canevas
 
 private:
     void timerCallback() override;
@@ -29,6 +46,8 @@ private:
                         juce::Colour colour, bool bold = false, float dx = 0.0f);
 
     HardTuneProcessor& proc;
+    HardTuneCanvas canvas;
+    double currentScale = 1.0;
     ht::Palette pal;
     bool lastDarkState = false;
     int  sizeIdx = 0;
