@@ -139,6 +139,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     transposeAtt = std::make_unique<SliderAtt> (apvts, HardTuneProcessor::kTranspose, transposeBar);
 
     setResizable (false, false);
+    lastScopeTotal = proc.getScopeTotal();
     applyScale (0.6);          // taille par defaut : x0.6 -> 845x461
     applyTheme();
     startTimerHz (30);
@@ -218,6 +219,19 @@ void HardTuneEditor::applyTheme()
     formantCap.setColour (juce::Label::textColourId, pal.inkFaint);
     formantBar.setAlpha (0.75f);
 
+    //  listes deroulantes + bouton de taille : eux aussi bicolores
+    pillLnf.setDark (dark);
+    keyBox.setLookAndFeel (&pillLnf);
+    scaleBox.setLookAndFeel (&pillLnf);
+    sizeButton.setColour (juce::TextButton::buttonColourId,
+                          dark ? juce::Colour (0xff1f3341) : juce::Colour (0xffa9ddf5));
+    sizeButton.setColour (juce::TextButton::buttonOnColourId,
+                          dark ? juce::Colour (0xff2a4456) : juce::Colour (0xffc4e9fa));
+    sizeButton.setColour (juce::TextButton::textColourOffId,
+                          dark ? juce::Colour (0xffbfe6f8) : juce::Colour (0xff0e527d));
+    sizeButton.setColour (juce::TextButton::textColourOnId,
+                          dark ? juce::Colour (0xffbfe6f8) : juce::Colour (0xff0e527d));
+
     repaint();
 }
 
@@ -260,10 +274,12 @@ void HardTuneEditor::paint (juce::Graphics& g)
 
     // boite de la valeur RETUNE (une seule fois, en haut a droite)
     auto rb = juce::Rectangle<float> (1010.0f, 272.0f, 96.0f, 30.0f);
-    g.setColour (juce::Colour (0xfff7feff).withAlpha (0.80f));
-    g.fillRoundedRectangle (rb, 6.0f);
+    juce::ColourGradient rbg (juce::Colour (0xffbfe6f8), 0.0f, rb.getY(),
+                              juce::Colour (0xffa5d9f4), 0.0f, rb.getBottom(), false);
+    g.setGradientFill (rbg);
+    g.fillRoundedRectangle (rb, 7.0f);
     g.setColour (juce::Colour (0xff9dc9e2));
-    g.drawRoundedRectangle (rb, 6.0f, 1.0f);
+    g.drawRoundedRectangle (rb, 7.0f, 1.0f);
 }
 
 void HardTuneEditor::resized()
@@ -362,11 +378,28 @@ void HardTuneEditor::timerCallback()
         const int tgt = proc.getTargetNote();
         keys.setPlaying (tgt, tgt >= 0);
 
-        // waveform : 512 echantillons pousses dans la fenetre de 5 s
-        std::array<float, HardTuneProcessor::kScopeSize> buf {};
-        proc.copyScope (buf.data());
-        scope.pushBlock (buf.data() + (HardTuneProcessor::kScopeSize - 512), 512,
-                         (int) proc.getSampleRate());
+        // waveform : on ne pousse QUE les points arrives depuis l'affichage
+        // precedent (compteur monotone), a la vraie cadence du flux. La
+        // fenetre fait donc 5 s reelles, meme si le timer derive.
+        const juce::int64 total = proc.getScopeTotal();
+        int fresh = (int) juce::jlimit<juce::int64> (0, (juce::int64) HardTuneProcessor::kScopeSize,
+                                                    total - lastScopeTotal);
+        lastScopeTotal = total;
+        const int rate = (int) std::lround (proc.getScopePointRate());
+        if (fresh > 0)
+        {
+            std::array<float, HardTuneProcessor::kScopeSize> buf {};
+            proc.copyScope (buf.data());
+            scope.pushBlock (buf.data() + (HardTuneProcessor::kScopeSize - fresh), fresh, rate);
+        }
+        else
+        {
+            //  pas d'audio : le temps avance quand meme (ligne plate), sinon la
+            //  courbe se fige et l'axe 0s..5s devient faux pendant un silence.
+            static const std::array<float, 2048> silence {};
+            const int n = juce::jlimit (1, 2048, (int) std::lround (rate / 30.0));
+            scope.pushBlock (silence.data(), n, rate);
+        }
 
         // cadran
         std::array<float, 256> cts {};

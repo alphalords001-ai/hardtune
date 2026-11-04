@@ -32,6 +32,7 @@ private:
     ht::Palette pal;
     bool lastDarkState = false;
     int  sizeIdx = 0;
+    juce::int64 lastScopeTotal = 0;
 
     // ---- en-tete (24,18,1360x60) -------------------------------------------
     juce::Label  titleLabel, keyCap, scaleCap, lightCap, bypassCap;

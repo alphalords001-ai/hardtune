@@ -76,6 +76,18 @@ public:
     static constexpr int kScopeSize = 2048;
     /** Copie le tampon circulaire de l'oscilloscope dans `dest` (kScopeSize valeurs). */
     void copyScope (float* dest) const noexcept;
+
+    /**  Compteur monotone des points d'oscilloscope ecrits. L'interface ne
+     *   consomme que la difference depuis l'affichage precedent : la fenetre
+     *   de 5 s suit alors le temps reel, pas la cadence du timer. */
+    juce::int64 getScopeTotal() const noexcept { return scopeTotal.load (std::memory_order_relaxed); }
+
+    /** Frequence du flux de points (echantillons decimes), en Hz. */
+    double getScopePointRate() const noexcept
+    {
+        const double step = juce::jmax (1.0, std::round (currentSampleRate / 12000.0));
+        return currentSampleRate / step;
+    }
     /** Historique de la correction en cents (une valeur par bloc). */
     static constexpr int kCentsCount = 256;
     void copyCents (float* dest) const noexcept;
@@ -94,6 +106,7 @@ private:
     // corruption du tas, plantage dans ntdll ("Write of address 0x24").
     std::vector<float> scopeBuf = std::vector<float> ((size_t) kScopeSize, 0.0f);
     std::atomic<int>   scopeWrite { 0 };
+    std::atomic<juce::int64> scopeTotal { 0 };
     std::vector<float> centsBuf = std::vector<float> ((size_t) kCentsCount, 0.0f);
     std::atomic<int>   centsWrite { 0 };
     double currentSampleRate = 44100.0;

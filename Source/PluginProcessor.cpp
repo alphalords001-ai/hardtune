@@ -260,13 +260,20 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
 
     // ---- oscilloscope : on ne garde qu'un point sur N pour ne pas saturer ----
     {
-        const int step = juce::jmax (1, numSamples / 64);
+        //  Decimation FIXE (~12 kHz de points, quel que soit le bloc) : sans
+        //  ca, le pas dependait de numSamples et l'axe 0s..5s ne tombait juste
+        //  pour aucune taille de bloc.
+        const int step = juce::jmax (1, (int) std::lround (currentSampleRate / 12000.0));
         int w = scopeWrite.load (std::memory_order_relaxed);
+        int written = 0;
         for (int i = 0; i < numSamples; i += step)
         {
             scopeBuf[(size_t) (w++ & (kScopeSize - 1))] = outPtrs[0][i];
+            ++written;
         }
         scopeWrite.store (w, std::memory_order_relaxed);
+        scopeTotal.store (scopeTotal.load (std::memory_order_relaxed) + (juce::int64) written,
+                          std::memory_order_relaxed);
 
         const int cw = centsWrite.load (std::memory_order_relaxed);
         centsBuf[(size_t) (cw & (kCentsCount - 1))] = core.getCentsError();
