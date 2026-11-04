@@ -95,6 +95,7 @@ private:
     double tap      = 0.0;        // point de lecture courant (position absolue)
     double dryTap   = 0.0;        // point de lecture du signal sec, aligné
     double spliceTap = 0.0;       // second point de lecture pendant un fondu
+    double mixNow    = 0.0;       // mélange sec/traité lissé : ne saute jamais
 
     // --- lissage du ratio, en cents ----------------------------------------
     double cents      = 0.0;
