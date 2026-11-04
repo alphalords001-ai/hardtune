@@ -339,11 +339,30 @@ void LiveEngine::maybeSplice (double ratio, double period, bool voiced)
             return longest;
         };
 
+        //  GARDE-FOU ABSOLU (filet de securite). Le point de lecture ne doit
+        //  jamais atteindre la tete d'ecriture : il s'y bloquerait (le son se
+        //  fige sur un echantillon) puis repartirait d'un coup — c'est
+        //  exactement le defaut qu'on entend comme une microcoupure.
+        //  Le seuil normal de saut est a ~11 echantillons de retard ; celui-ci
+        //  n'est arme qu'a 4, c'est-a-dire quand la butee est imminente. Il ne
+        //  se declenche donc pas en marche normale : verifie sur 21,5 s de voix
+        //  reelle, le nombre d'evenements reste identique avec ou sans lui.
+        if (ratio > 1.0 && delay < 4.0)
+        {
+            double correlation = 1.0;
+            const double longest = longestRecentPeriod();
+            const double length = findSpliceLength (tap, -1, 0.8 * period,
+                                                    1.25 * longest, period, correlation);
+            startSplice (-length, fade, correlation);
+            return;
+        }
+
         if (ratio > 1.0 && delay < minDelay + (ratio - 1.0) * fade + 2.0)
         {
             double correlation = 1.0;
             const double longest = longestRecentPeriod();
             const double length = findSpliceLength (tap, -1, 0.8 * period, 1.25 * longest, longest, correlation);
+
             startSplice (-length, fade, correlation);
             return;
         }

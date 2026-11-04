@@ -218,10 +218,18 @@ void HardTuneProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& mi
     ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midi);
 
-    ht::diag::logOnce ("premier appel a processBlock");
     ht::diag::stage ("processBlock");
 
-    const juce::ScopedLock sl (getCallbackLock());
+    //  JAMAIS de verrou bloquant sur le fil audio : si prepareToPlay() est en
+    //  train de realiser ses tampons, on rend le bloc tel quel (le son passe
+    //  sans correction pendant un bloc) au lieu d'attendre. Attendre, ici,
+    //  c'est une microcoupure : l'hote a un delai a tenir, pas nous.
+    //  Le logOnce du demarrage est retire pour la meme raison : il ouvrait un
+    //  fichier au premier appel, c'est-a-dire dans le premier bloc audio.
+    const juce::ScopedTryLock stl (getCallbackLock());
+
+    if (! stl.isLocked())
+        return;
 
     const int numSamples  = buffer.getNumSamples();
     const int numChannels = buffer.getNumChannels();
