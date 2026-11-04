@@ -71,7 +71,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 
     canvas.addAndMakeVisible (sizeButton);
     sizeButton.setButtonText (juce::String::fromUTF8 ("\xe2\x9f\xb2"));   // ⤢
-    sizeButton.setTooltip ("Size : 0.6 / 1.0 / 1.5");
+    sizeButton.setTooltip ("Size : 0.68 / 0.78 / 0.90");
     sizeButton.onClick = [this] { cycleSize(); };
     sizeButton.setColour (juce::TextButton::buttonColourId,   juce::Colour (0xffa9ddf5));
     sizeButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffc4e9fa));
@@ -145,7 +145,7 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
 
     setResizable (false, false);
     lastScopeTotal = proc.getScopeTotal();
-    applyScale (0.6);          // taille par defaut : x0.6 -> 845x461
+    applyScale (0.68);         // taille par defaut : interface compacte
     applyTheme();
     startTimerHz (30);
 }
@@ -312,9 +312,9 @@ void HardTuneEditor::layoutCanvas()
     scaleBox   .setBounds (552, 28, 126, 34);
     lightCap   .setBounds (1058, 32, 70, 24);
     lightSwitch.setBounds (1136, 27, 50, 28);
-    bypassCap  .setBounds (1190, 32, 90, 24);
-    bypassSwitch.setBounds (1248, 25, 50, 28);
-    sizeButton .setBounds (1308, 25, 40, 28);
+    bypassCap  .setBounds (1176, 32, 78, 24);
+    bypassSwitch.setBounds (1260, 25, 50, 28);
+    sizeButton .setBounds (1320, 25, 40, 28);
 
     // ---- clavier -----------------------------------------------------------
     keys   .setBounds (36, 106, 1348, 106);
@@ -322,7 +322,7 @@ void HardTuneEditor::layoutCanvas()
 
     // ---- waveform : cadre peint a (40,309,726x391) -------------------------
     waveCap.setBounds (43, 272, 340, 26);
-    scope  .setBounds (24, 295, 758, 443 + 26);   // + 26 = place de l'axe
+    scope  .setBounds (40, 300, 726, 410);          // cadre contenu dans la carte
 
     // ---- RETUNE SPEED ------------------------------------------------------
     retuneCap  .setBounds (817, 270, 200, 26);
@@ -352,9 +352,9 @@ void HardTuneEditor::layoutCanvas()
     inPeak    .setBounds (890, 542, 90, 20);
     inPeakVal .setBounds (866, 566, 120, 20);
 
-    outCap    .setBounds (1290, 512, 100, 22);
+    outCap    .setBounds (1270, 512, 100, 22);
     meterOut  .setBounds (1300, 536, 70, 112);
-    outCap2   .setBounds (1290, 648, 100, 22);
+    outCap2   .setBounds (1270, 648, 100, 22);
     outPeak   .setBounds (1180, 552, 90, 20);
     outPeakVal.setBounds (1166, 576, 120, 20);
 
@@ -363,7 +363,7 @@ void HardTuneEditor::layoutCanvas()
     formantBar.setBounds (820, 700, 176, 26);
     transposeCap.setBounds (1180, 684, 150, 22);
     transposeBar.setBounds (1180, 700, 150, 26);
-    transposeVal.setBounds (1338, 682, 60, 22);
+    transposeVal.setBounds (1310, 682, 60, 22);
 }
 
 void HardTuneEditor::timerCallback()
@@ -440,8 +440,8 @@ void HardTuneEditor::timerCallback()
 
 void HardTuneEditor::cycleSize()
 {
-    // regle : 0.6 -> 1.0 -> 1.5 -> 0.6
-    static const double factors[3] = { 0.6, 1.0, 1.5 };
+    // Tailles compactes : evite les fenetres geantes dans les DAW.
+    static const double factors[3] = { 0.68, 0.78, 0.90 };
     sizeIdx = (sizeIdx + 1) % 3;
     applyScale (factors[sizeIdx]);
 }
