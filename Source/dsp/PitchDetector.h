@@ -1,11 +1,22 @@
-//  PitchDetector.h — détection de hauteur par l'algorithme YIN.
+//  PitchDetector.h — détection de hauteur par la méthode MPM (NSDF).
 //
-//  Référence : A. de Cheveigné & H. Kawahara, "YIN, a fundamental frequency
-//  estimator for speech and music", JASA 111(4), 2002.
+//  Remplace YIN (v0.7.0). Référence :
+//      P. McLeod & G. Wyvill, "A smarter way to find pitch", ICMC 2005.
 //
-//  Principe : fonction de différence + normalisation cumulative (CMNDF) +
-//  seuil absolu + interpolation parabolique. Robuste sur la voix parlée/chantée,
-//  temps de calcul raisonnable.
+//  Principe : on calcule la fonction NSDF (normalized square difference
+//  function), qui vaut 1 pour un décalage correspondant exactement à une
+//  période et reste positive sur les décalages harmoniques — contrairement à la
+//  fonction de différence de YIN qui, elle, est un « puits ». On choisit le
+//  PREMIER maximum local qui dépasse 90 % du maximum global (règle MPM) : c'est
+//  ce qui évite de détecter l'octave en dessous, défaut classique de YIN.
+//
+//  Coût : l'analyse est faite sur le signal décimé par 4 (12 kHz à 48 kHz), ce
+//  qui divise le travail par 16 par rapport à une autocorrélation pleine bande,
+//  puis la période est AFFINÉE sur le signal pleine bande (7 corrélations
+//  seulement) pour retrouver une précision inférieure au cent.
+//
+//  Aucune allocation mémoire après prepare() : la fonction process() n'appelle
+//  ni new, ni malloc, ni push_back.
 #pragma once
 
 #include <vector>
@@ -20,42 +31,60 @@ class PitchDetector
 public:
     struct Estimate
     {
-        double hz = 0.0;          // fréquence détectée (0 si silence)
-        double confidence = 0.0;  // 0 = pas de périodicité, 1 = parfaitement périodique
-        long long pos = 0;        // position absolue (en samples) de la fin de la fenêtre d'analyse
+        double hz         = 0.0;   // 0 = pas de hauteur exploitable
+        double confidence = 0.0;   // clarté NSDF, 0..1
+        double rms        = 0.0;   // niveau du bloc analysé
+        double zcr        = 0.0;   // taux de passages par zéro (sibilantes)
+        bool   voiced     = false; // périodicité suffisante
+        bool   sibilant   = false; // bruit non harmonique (« S », « T », « P »)
+        bool   valid      = false; // une nouvelle analyse a eu lieu pendant l'appel
+        long long pos     = 0;     // position absolue de la fin de la fenêtre
     };
 
     void prepare (double sampleRate, int windowSize = 1024, int hopSize = 128);
     void reset();
 
+    /** Plage de recherche du F0. 70 Hz = voix de basse, 1000 Hz = soprano. */
     void setRange (double minHz, double maxHz);
 
-    /** Consomme un bloc. Les estimations disponibles sont ajoutées à `out`. */
-    void process (const float* mono, int numSamples, std::vector<Estimate>& out);
+    /**
+        Consomme un bloc. Renvoie la dernière estimation disponible.
+        `valid` vaut false tant que le pas d'analyse n'a pas été atteint :
+        l'appelant conserve alors sa décision précédente (aucun travail inutile).
+    */
+    Estimate process (const float* mono, int numSamples);
 
     double getSampleRate() const noexcept { return sr; }
-    int getWindowSize()  const noexcept { return windowSize; }
+    int    getWindowSize() const noexcept { return windowSize; }   // en échantillons réels
+    int    getHopSize()    const noexcept { return hopSize; }
 
 private:
-    bool analyse (double& hz, double& confidence);
+    bool   analyse (double& hz, double& clarity);
+    double refineLag (double coarseLagFull) const;
+    void   buildDecimationFilter();
 
-    double sr = 48000.0;
-    int windowSize = 1024;
-    int hopSize = 128;
+    double sr         = 48000.0;
+    int    windowSize = 1024;      // durée d'analyse, en échantillons réels
+    int    hopSize    = 128;
 
-    double minHz = 60.0, maxHz = 1200.0;
+    double minHz = 70.0, maxHz = 1000.0;
 
-    std::vector<float>  tail;      // les `windowSize` derniers samples (le plus récent en dernier)
+    // --- décimation ---------------------------------------------------------
+    static constexpr int kDecim = 4;
+    static constexpr int kTaps  = 15;      // filtre anti-repliement (fenêtre de Blackman)
+    float  fir[kTaps] {};
+    int    nd      = 0;                    // taille de la fenêtre décimée
+    int    tauMax  = 0;                    // décalage maximal (en échantillons décimés)
+    int    tauMin  = 0;
 
-    //  Version decimee (2x) du signal, pour l'analyse seulement : deux fois
-    //  moins d'echantillons a correler = jusqu'a 8x moins de calcul, sans
-    //  perdre la duree d'analyse (le meme nombre de millisecondes).
-    std::vector<float>  dec;
-    std::vector<float>  carry;     // samples pas encore traités par hop
-    std::vector<double> diff;      // fonction de différence
-    std::vector<double> cmnd;      // fonction normalisée
+    std::vector<float>  tail;      // fenêtre glissante pleine bande (le plus récent en dernier)
+    float               carry[kDecim] {};  // échantillons pas encore décimés
+    int                 carryLen = 0;
+    long long           absPos   = 0;
 
-    long long absPos = 0;
+    std::vector<float>  dec;       // signal décimé (nd échantillons)
+    std::vector<double> nsdf;      // 0..tauMax
+    std::vector<double> powPrefix; // sommes de carrés cumulées (dénominateur NSDF)
 };
 
 } // namespace tune

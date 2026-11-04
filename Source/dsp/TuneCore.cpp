@@ -1,7 +1,5 @@
-//  TuneCore.cpp
+//  TuneCore.cpp — v0.7.0 (MPM + TD-PSOLA, plus de Rubber Band).
 #include "TuneCore.h"
-
-#include <rubberband/RubberBandStretcher.h>
 
 #include <algorithm>
 #include <cmath>
@@ -12,53 +10,40 @@ namespace tune
 
 namespace
 {
-    constexpr int    kHop = 128;                 // pas d'analyse
+    //  Tranche de traitement FIXE. Le détecteur analyse tous les 128
+    //  échantillons et le moteur travaille par tranches de 64 : la décision de
+    //  hauteur tombe donc toujours aux mêmes instants, quelle que soit la taille
+    //  de bloc du DAW. C'est ce qui garantit un résultat identique en 64 et en
+    //  2048 échantillons (test 6).
+    constexpr int    kChunk = 64;
+    constexpr int    kAnalysisHop = 128;
 
-    // Marge de la FIFO de sortie : Rubber Band livre ses echantillons par a-coups
-    // (1 a 8 de moins que prevu pendant plusieurs blocs de suite). Sans marge, le
-    // manque etait comble par des zeros : un trou = un clic en fin de bloc.
-    constexpr int    kFifoMargin = 128;
+    //  Seuil de bruit : sous -55 dBFS, on considère qu'il n'y a rien à accorder.
+    //  Évite d'accorder le souffle de la salle sur scène.
+    constexpr double kGateDb = -55.0;
 
-    // Ecart constant entre l'arrivee de la premiere sortie et l'alignement reel
-    // du signal (mesure par correlation, voir tests)
-    constexpr int    kAlignOffset = 0;
+    //  Clarté minimale du détecteur pour décider « voisé ».
+    constexpr double kVoicedClarity = 0.45;
 
-    // Retard interne de Rubber Band (R2, PitchHighConsistency) entre l'entree et
-    // le son qu'il fabrique a l'instant present ; constant en echantillons.
-    constexpr int    kStretcherDelay = 2080;
+    //  Demande maximale au moteur (±600 cents). Au-delà, on est sur une erreur
+    //  de détection, pas sur un chanteur faux.
+    constexpr double kMaxDemandCents = 600.0;
 
-    constexpr double kVoicedThreshold = 0.30;
+    constexpr double kFormantRangeCents = 500.0;  // FORMANT ±100 % -> ±500 cents
 
-    constexpr double kFormantRangeCents = 500.0; // FORMANT ±100 % -> ±500 cents
+    //  Hystérésis de la note visée (en demi-tons) : évite que la voix bascule
+    //  d'une note à l'autre sur un vibrato large.
+    constexpr double kStickyDrop = 0.80;
+    constexpr double kStickyBias = 0.08;
 
-    // Plage de transposition confiée à Rubber Band
-    constexpr double kRatioMin = 0.5;
-    constexpr double kRatioMax = 2.0;
-
-    constexpr int kOptions =
-          (int) RubberBand::RubberBandStretcher::OptionProcessRealTime
-        | (int) RubberBand::RubberBandStretcher::OptionEngineFiner      // moteur R3
-        | (int) RubberBand::RubberBandStretcher::OptionWindowShort      // latence minimale
-        //  PITCH : PitchHighConsistency et SURTOUT pas PitchHighQuality.
-        //  La documentation de Rubber Band est explicite : PitchHighQuality est
-        //  a ne PAS utiliser pour des changements de hauteur variables dans le
-        //  temps, et PitchHighConsistency est la seule option qui "supporte les
-        //  changements dynamiques de hauteur SANS DISCONTINUITES, y compris en
-        //  traversant le ratio 1.0".
-        //  C'etait la cause des craquements : mesure avec Rubber Band seul,
-        //  glissando de +-20 cents (cas d'un chanteur qui vibre) :
-        //      PitchHighQuality, autour de 1.0        -> 1034 discontinuites
-        //      PitchHighQuality, autour de 1.06/1.41  -> 0
-        //      PitchHighConsistency, autour de 1.0    -> 0
-        //  D'ou le symptome etrange rapporte : plus de craquement des que la
-        //  transposition s'eloignait de 0 demi-ton.
-        | (int) RubberBand::RubberBandStretcher::OptionPitchHighConsistency
-        | (int) RubberBand::RubberBandStretcher::OptionFormantPreserved
-        | (int) RubberBand::RubberBandStretcher::OptionSmoothingOn
-        // Canaux traites ENSEMBLE : sans cette option, Rubber Band elargit
-        // artificiellement l'image stereo et casse la compatibilite mono
-        // (c'est exactement le defaut signale : « le mono devient stereo »).
-        | (int) RubberBand::RubberBandStretcher::OptionChannelsTogether;
+    //  GARDE DE CONTINUITÉ. Un saut de plus de 120 cents d'une analyse à la
+    //  suivante (2,7 ms) n'est pas un chanteur : c'est le détecteur qui hésite
+    //  entre deux décalages (typiquement sur une voyelle très résonante ou
+    //  près d'une consonne). On exige donc DEUX analyses concordantes avant
+    //  d'accepter un tel saut. Coût : 5 ms de retard sur un vrai changement de
+    //  note ; bénéfice : plus aucune bascule de note parasite en live.
+    constexpr double kJumpCents     = 120.0;
+    constexpr double kConfirmCents  = 60.0;
 }
 
 // ============================================================================
@@ -67,14 +52,12 @@ double TuneCore::linToDb (double x) noexcept
     return 20.0 * std::log10 (std::max (1.0e-5, std::abs (x)));
 }
 
-// derive aléatoire lente, bornée à -1..+1 (marche filtrée)
+// dérive aléatoire lente, bornée à -1..+1 (marche filtrée)
 double TuneCore::humanizeCents()
 {
-    // Une nouvelle cible toutes les ~200 ms : la voix derive lentement au lieu
-    // de trembler. C'est exactement le comportement d'un chanteur humain.
     if (--humanizeTicks <= 0)
     {
-        humanizeTicks = std::max (1, (int) std::lround (0.200 * sr / (double) kHop));
+        humanizeTicks = std::max (1, (int) std::lround (0.200 * sr / (double) kAnalysisHop));
         rngState = rngState * 1664525u + 1013904223u;
         humanizeTarget = ((double) (rngState >> 8) / 16777216.0) * 2.0 - 1.0;
     }
@@ -89,162 +72,68 @@ TuneCore::~TuneCore() = default;
 
 void TuneCore::prepare (double sampleRate, int maximumBlockSize, int channels)
 {
-    sr        = sampleRate;
-    maxBlock  = std::max (32, maximumBlockSize);
-    numChannels = std::max (1, std::min (2, channels));
-
-    // Tant que tout n'est pas pret, process() ne doit rien faire : un etat a
-    // moitie construit (tampon vide, stretcher nul) donnerait un pointeur nul
-    // au premier bloc audio.
     ready = false;
 
-    try
-    {
-        auto newStretcher = std::make_unique<RubberBand::RubberBandStretcher> (
-            (size_t) std::lround (sr),
-            (size_t) numChannels,
-            kOptions,
-            1.0,        // time ratio (aucun changement de durée)
-            1.0);       // pitch scale
+    sr          = (sampleRate > 0.0 ? sampleRate : 48000.0);
+    maxBlock    = std::max (32, maximumBlockSize);
+    numChannels = std::max (1, std::min (2, channels));
 
-        newStretcher->setMaxProcessSize ((size_t) maxBlock);
-        newStretcher->setTimeRatio (1.0);
-        newStretcher->setPitchScale (1.0);
-        newStretcher->setFormantScale (1.0);
+    //  Plage imposée en live : 70 Hz (basse) à 1000 Hz (soprano). En dessous de
+    //  70 Hz on ne trouve que des bruits de manipulation, au-dessus de 1000 Hz
+    //  des harmoniques — les deux produisaient de fausses notes sur scène.
+    detector.setRange (70.0, 1000.0);
+    detector.prepare (sr, 1024, kAnalysisHop);
 
-        //  Latence REELLE du stretcher (documentation Rubber Band) :
-        //      getStartDelay()        = echantillons a jeter au debut de la sortie
-        //      getPreferredStartPad() = zeros a mettre au debut de l'entree
-        //  Nos anciennes versions n'annoncaient que le premier terme (1280) alors
-        //  que le retard reel mesure hors DAW etait de 2048 echantillons : le DAW
-        //  ne compensait donc que 26.7 ms sur 42.7, et la voix traitee arrivait
-        //  systematiquement en retard sur le reste du projet.
-        //  Surplus constate et reproductible : Rubber Band annonce 1280
-        //  echantillons (getStartDelay) mais son retard RÉEL mesure hors DAW
-        //  est de 2048 a 48 kHz -- verifie avec Rubber Band SEUL, sans notre
-        //  code (chirp 200->400 Hz, correlation 1.0000). Il vaut donc mieux
-        //  annoncer la valeur mesuree : sous-declarer la latence fait arriver
-        //  la voix en retard sur le reste du projet.
-        //  Avec PitchHighConsistency le retard reel mesure passe de 2048 a
-        //  2080 echantillons, et cette valeur est CONSTANTE en echantillons :
-        //  mesuree identique a 44100 et a 48000 Hz (chirp, correlation 1.0000).
-        //  Le surplus au-dela de getStartDelay() vaut donc 800 echantillons.
-        //  Mesure EXACTE de l'instant d'arrivee de la premiere sortie : on nourrit
-        //  le stretcher de silence, par pas de kHop comme en fonctionnement
-        //  reel, jusqu'a ce qu'il rende quelque chose. Cela remplace le chiffre
-        //  « 800 » mesure a la main, et surtout rend le retard independant de la
-        //  taille de bloc de l'hote.
-        int arrival = 0;
-        {
-            // Un faible bruit et non du silence pur : Rubber Band traite le silence
-            // a part (sortie plus tardive), ce qui surestimait le retard de 500
-            // echantillons par rapport a une vraie voix.
-            std::vector<float> probe ((size_t) kHop, 0.0f);
-            unsigned int seed = 0x9e3779b9u;
-            for (auto& s : probe)
-            {
-                seed = seed * 1664525u + 1013904223u;
-                s = 0.05f * ((float) (seed >> 8) / 8388608.0f - 1.0f);
-            }
-            const float* zp[2] = { probe.data(), probe.data() };
+    engine.prepare (sr, maxBlock, numChannels);
 
-            while (arrival < 16 * 4096 && (int) newStretcher->available() <= 0)
-            {
-                newStretcher->process (zp, (size_t) kHop, false);
-                arrival += kHop;
-            }
+    //  Retard de commande = latence du moteur moins la demi-fenêtre d'analyse
+    //  (instant que décrit la mesure). À 48 kHz : 1216 - 704 = 512 échantillons
+    //  (10,7 ms). Sans ce retard, on corrige le son d'il y a 26 ms avec la
+    //  hauteur d'aujourd'hui : sur un vibrato de 6 Hz, la correction part en
+    //  retard de 24 degrés et laisse ~20 cents d'oscillation résiduelle.
+    const int controlDelaySamples = std::max (0, engine.latencySamples()
+                                               - detector.getWindowSize() / 2);
+    ctrlDelayChunks = controlDelaySamples / kChunk;
 
-            // on jette ce qui est sorti et on repart d'un stretcher propre
-            newStretcher->reset();
-            newStretcher->setPitchScale (1.0);
-            newStretcher->setFormantScale (1.0);
-        }
+    int ctrlSize = 1;
+    while (ctrlSize < 2 * (ctrlDelayChunks + 8)) ctrlSize <<= 1;
+    ctrlMask = ctrlSize - 1;
 
-        const int newLatency = arrival + kFifoMargin + kAlignOffset;
+    ctrlRatio.assign ((size_t) ctrlSize, 1.0);
+    ctrlPeriod.assign ((size_t) ctrlSize, sr / 220.0);
+    ctrlPos = 0;
 
-        // Plancher 100 Hz (G2) : la fenetre reste a 1024 echantillons (21 ms).
-        // A 80 Hz elle montait a 1500 echantillons (31 ms), et le retard de
-        // detection mangeait la moitie de la correction du vibrato.
-        detector.setRange (100.0, 1200.0);
-        //  Pas d'analyse = 256 echantillons (5.3 ms) et non 128 : mesure hors
-        //  DAW, cela fait passer le cout CPU du plugin de 15.7 % a 10.2 % d'un
-        //  coeur pour seulement +4 cents de vibrato residuel. Le fil audio
-        //  n'deborde plus, donc plus de craquements.
-        detector.prepare (sr, 1024, 2 * kHop);
-
-        // retard du chemin sec = latence du stretcher, arrondie à une puissance de 2
-        int size = 1;
-        while (size < newLatency + maxBlock + 64) size <<= 1;
-
-        std::vector<float> newDry ((size_t) size * (size_t) numChannels, 0.0f);
-        std::vector<float> newWet ((size_t) maxBlock * 2 + 2, 0.0f);
-        const int newFifoSize = newLatency + 8 * maxBlock + 4096;
-        std::vector<float> newFifo ((size_t) newFifoSize * (size_t) numChannels, 0.0f);
-
-        // --- publication (aucune allocation apres ce point) -----------------
-        stretcher = std::move (newStretcher);
-        latency   = newLatency;
-        serveStart = (long long) arrival + kFifoMargin;
-        // Retard de la commande de hauteur (voir delayedRatio) : retard INTERNE du
-        // stretcher (kStretcherDelay) moins la demi-fenetre d'analyse. Mesure par
-        // balayage hors DAW : l'ecart-type du vibrato residuel est minimal
-        // (1,3 cent) pour 1500..1700 et remonte de part et d'autre (14,8 cents
-        // sans retard, 8,6 cents a 2500).
-        controlDelay = std::max (0, kStretcherDelay - detector.getWindowSize() / 2);
-        dryMask   = size - 1;
-        dryDelay  = std::move (newDry);
-        tmpWet    = std::move (newWet);
-        wetFifo   = std::move (newFifo);
-        fifoSize  = newFifoSize;
-        fifoRead  = 0;
-        fifoFill  = 0;
-
-        frames.clear();
-        frames.reserve (512);
-        estimates.reserve (64);
-
-        reset();
-        ready = true;
-    }
-    catch (...)
-    {
-        // echec (memoire, initialisation de Rubber Band...) : moteur inactif,
-        // le plugin reste transparent au lieu de faire tomber l'hote.
-        stretcher.reset();
-        dryDelay.clear();
-        tmpWet.clear();
-        dryMask = 0;
-        latency = 0;
-        ready   = false;
-    }
+    reset();
+    ready = true;
 }
 
 void TuneCore::reset()
 {
-    if (stretcher != nullptr)
-        stretcher->reset();
-
-    std::fill (dryDelay.begin(), dryDelay.end(), 0.0f);
-    std::fill (wetFifo.begin(), wetFifo.end(), 0.0f);
-    fifoRead = 0;
-    fifoFill = 0;
-    writePos = 0;
-    totalIn  = 0;
-
     detector.reset();
-    frames.clear();
-    estimates.clear();
+    engine.reset();
 
-    stickyValid   = false;
-    stickyNote    = 60;
-    smoothedRatio = 1.0;
-    lastGoodPeriod = 0.0;
+    std::fill (ctrlRatio.begin(), ctrlRatio.end(), 1.0);
+    std::fill (ctrlPeriod.begin(), ctrlPeriod.end(), sr / 220.0);
+    ctrlPos = 0;
 
-    humanizeWalk = 0.0;
+    stickyValid = false;
+    stickyNote  = 60;
+    lastTarget  = -1;
+    lastHz      = 0.0;
+    candHz      = 0.0;
+    candCount   = 0;
+    ratioTarget = 1.0;
+    ratioSm     = 1.0;
+    logHzSm     = std::log (220.0);
+    periodSm    = sr / 220.0;
+    mixTarget   = 0.0;
+    holdSamples = 0;
+
+    humanizeTicks  = 1;
+    humanizeWalk   = 0.0;
     humanizeTarget = 0.0;
-    humanizeTicks = 0;
-    vibratoPhase = 0.0;
-    rngState = 0x12345678u;
+    vibratoPhase   = 0.0;
+    rngState       = 0x12345678u;
 
     inPeakLin = inRmsLin = outPeakLin = outRmsLin = 0.0;
     uiInPeak.store (-100.0f);
@@ -261,24 +150,75 @@ void TuneCore::reset()
 }
 
 // ============================================================================
-//  Quantification
+//  Décision de hauteur
 // ============================================================================
-void TuneCore::pushFrame (long long pos, double hz, double conf)
+void TuneCore::updateDecision (const PitchDetector::Estimate& e)
 {
-    Frame f;
-    f.pos    = pos;
-    f.hz     = hz;
-    f.voiced = (hz > 0.0 && conf > kVoicedThreshold);
+    if (! e.valid)
+        return;
 
-    if (! f.voiced)
+    const int    hop     = std::max (1, detector.getHopSize());
+    const double hopSec  = (double) hop / sr;
+
+    const double levelDb = linToDb (std::max (e.rms, 1.0e-7));
+    const bool   aboveGate = levelDb > kGateDb;
+
+    bool voiced = e.voiced && aboveGate && e.confidence >= kVoicedClarity;
+
+    //  MAINTIEN APRÈS CONSONNE : une plosive coupe la périodicité pendant 10 à
+    //  30 ms. Sans maintien, la correction se couperait au milieu de chaque
+    //  syllabe (« voix qui hoquette »). On garde donc la correction pendant
+    //  `sibilantMs` après la dernière trame voisée.
+    if (voiced)
     {
-        // Silence / consonne : on relâche la correction (ratio -> 1, transparent)
-        smoothedRatio += (1.0 - smoothedRatio) * 0.25;
-        f.ratio  = smoothedRatio;
-        f.target = -1;
+        holdSamples = (int) std::lround ((double) params.sibilantMs * 0.001 * sr);
     }
-    else
+    else if (holdSamples > 0)
     {
+        holdSamples -= hop;
+        if (holdSamples > 0)
+            voiced = true;
+    }
+
+    if (voiced && e.hz > 0.0)
+    {
+        // ---- garde de continuité --------------------------------------------
+        double hz = e.hz;
+
+        if (lastHz > 0.0)
+        {
+            const double jump = std::abs (ratioToCents (hz / lastHz));
+
+            if (jump > kJumpCents)
+            {
+                if (candCount > 0 && std::abs (ratioToCents (hz / candHz)) < kConfirmCents)
+                    ++candCount;
+                else
+                {
+                    candHz    = hz;
+                    candCount = 1;
+                }
+
+                if (candCount < 2)
+                    hz = lastHz;              // on garde la note tenue
+                else
+                {
+                    lastHz    = hz;
+                    candCount = 0;
+                }
+            }
+            else
+            {
+                lastHz    = hz;
+                candCount = 0;
+            }
+        }
+        else
+        {
+            lastHz = hz;
+        }
+
+        // ---- note visée ------------------------------------------------------
         const double midiF = hzToMidi (hz);
         const int    cand  = mapper.nearestNote (midiF);
 
@@ -292,7 +232,7 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
             const double dCand   = std::abs (midiF - (double) cand);
             const double dSticky = std::abs (midiF - (double) stickyNote);
 
-            if (dSticky > 0.80 || dCand + 0.08 < dSticky)
+            if (dSticky > kStickyDrop || dCand + kStickyBias < dSticky)
                 stickyNote = cand;
         }
 
@@ -307,60 +247,77 @@ void TuneCore::pushFrame (long long pos, double hz, double conf)
         if (params.vibrato > 0.0001f)
         {
             const double hz = (double) std::max (0.1f, params.vibratoHz);
-            vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) kHop / sr;
+            vibratoPhase += 2.0 * 3.14159265358979 * hz * (double) hop / sr;
             if (vibratoPhase > 6.283185307179586)
                 vibratoPhase -= 6.283185307179586;
             cents += std::sin (vibratoPhase) * (double) params.vibrato * 50.0;
         }
 
-        const double target = std::min (kRatioMax, std::max (kRatioMin, centsToRatio (cents)));
+        cents = std::min (kMaxDemandCents, std::max (-kMaxDemandCents, cents));
 
-        double alpha = 0.0;
-        if (params.retuneMs > 0.5f)
-        {
-            const double tau = (double) params.retuneMs * 0.001;
-            alpha = std::min (0.9999, std::max (0.0, std::exp (-(double) kHop / (tau * sr))));
-        }
+        // ---- lissage exponentiel (LERP) --------------------------------------
+        //  On lisse la HAUTEUR DE SORTIE (en logarithme, donc en cents), et non
+        //  le rapport de transposition. C'est une différence de fond :
+        //  si on lisse le rapport, une petite erreur sur la période de référence
+        //  se transforme directement en erreur de justesse sur la sortie
+        //  (mesuré : 11 cents sur voix réelle). En lissant la hauteur visée, la
+        //  sortie vaut exactement cette hauteur, quelle que soit l'estimation de
+        //  période, et le rapport est recalculé à chaque tranche par
+        //  r = hauteurVisée x période / sr.
+        //
+        //  Deux constantes de temps :
+        //   - 6 ms mini pour suivre une dérive continue (vibrato, justesse) ;
+        //   - 21 ms mini AUX CHANGEMENTS DE NOTE : mesure sur voix réelle, c'est
+        //     ce qui fait passer les sauts brusques de 512 à 385 sans dégrader
+        //     la justesse. Au-delà de 21 ms la note ne se pose plus (46 ms ->
+        //     9 cents, 133 ms -> 11 cents).
+        const bool noteChanged = (stickyNote != lastTarget);
 
-        smoothedRatio = alpha * smoothedRatio + (1.0 - alpha) * target;
-        f.ratio  = smoothedRatio;
-        f.target = (int) std::lround (targetMidi);
+        const double floorMs = noteChanged ? std::max ((double) params.noteRampMs, 0.0) : 0.0;
+        const double tau = std::max ((double) params.retuneMs, std::max (6.0, floorMs)) * 0.001;
+        const double alpha = std::exp (-hopSec / std::max (tau, 1.0e-4));
+
+        const double demandedHz = std::max (30.0, hz * centsToRatio (cents));
+        logHzSm = alpha * logHzSm + (1.0 - alpha) * std::log (demandedHz);
+
+        // ---- période réelle du signal (celle des grains, pas la cible) -------
+        const double p = std::min (sr / 70.0, std::max (sr / 1000.0, sr / hz));
+        periodSm += (p - periodSm) * (noteChanged ? 1.0 : 0.7);
+
+        ratioTarget = centsToRatio (cents);
+        ratioSm     = std::min (2.0, std::max (0.5,
+                        std::exp (logHzSm) * periodSm / sr));
+
+        lastTarget = stickyNote;
+        mixTarget  = 1.0;
+
+        uiHz.store ((float) hz);
+        uiMidi.store ((float) midiF);
+        uiVoiced.store (true);
+        uiTarget.store (stickyNote);
+        uiCents.store ((float) ((midiF - (double) stickyNote) * 100.0));
+    }
+    else
+    {
+        // ---- non voisé : sibilante, plosive, souffle, silence ----------------
+        //  On passe en direct (le moteur est court-circuité) et on relâche la
+        //  correction en 15 ms pour ne pas créer de marche de hauteur.
+        mixTarget = 0.0;
+
+        const double alpha = std::exp (-hopSec / 0.015);
+        logHzSm = alpha * logHzSm + (1.0 - alpha) * std::log (sr / periodSm);
+        ratioSm = std::min (2.0, std::max (0.5, std::exp (logHzSm) * periodSm / sr));
+        ratioTarget = 1.0;
+
+        holdSamples = std::max (0, holdSamples - hop);
+
+        uiHz.store (0.0f);
+        uiVoiced.store (false);
+        uiTarget.store (-1);
+        uiCents.store (0.0f);
     }
 
-    frames.push_back (f);
-    if (frames.size() > 600)
-        frames.erase (frames.begin(), frames.begin() + 200);
-}
-
-// Le stretcher fabrique, a l'instant t, le son qui est entre dans le plugin il
-// y a `latence propre du stretcher` echantillons (~43 ms). Or la hauteur
-// mesuree a l'instant t decrit le son de t - (demi-fenetre d'analyse). Si on
-// appliquait la mesure du moment, on corrigerait le son d'il y a 43 ms avec la
-// hauteur d'aujourd'hui : sur un vibrato de 5,5 Hz (periode 180 ms) cela
-// revient a corriger a contre-temps, donc a ne PAS le corriger du tout (mesure :
-// ecart-type 14,8 cents avant et apres, soit zero effet). On applique donc la
-// commande creee `controlDelay` echantillons plus tot, celle qui decrit
-// exactement le son que le stretcher est en train de produire.
-double TuneCore::delayedRatio (long long now) const
-{
-    const long long wanted = now - (long long) controlDelay;
-
-    for (size_t i = frames.size(); i-- > 0;)
-        if (frames[i].time <= wanted)
-            return std::min (kRatioMax, std::max (kRatioMin, frames[i].ratio));
-
-    return 1.0;      // pas encore de commande assez ancienne : transparent
-}
-
-double TuneCore::currentRatio() const
-{
-    return std::min (kRatioMax, std::max (kRatioMin, smoothedRatio));
-}
-
-double TuneCore::formantRatio() const
-{
-    return std::min (2.0, std::max (0.5,
-             centsToRatio ((double) params.formant * kFormantRangeCents)));
+    uiRatio.store ((float) ratioSm);
 }
 
 // ============================================================================
@@ -368,239 +325,99 @@ double TuneCore::formantRatio() const
 // ============================================================================
 void TuneCore::process (const float* const* in, float* const* out, int numSamples, int channels)
 {
-    if (numSamples <= 0 || ! ready || stretcher == nullptr || in == nullptr || out == nullptr)
+    if (numSamples <= 0 || ! ready || in == nullptr || out == nullptr)
         return;
 
     if (in[0] == nullptr || out[0] == nullptr)
         return;
 
-    // Les tampons doivent avoir exactement la taille annoncee par prepare() :
-    // un etat incoherent ici veut dire pointeur nul ou debordement plus loin.
-    if (maxBlock < 1
-        || tmpWet.size() < (size_t) maxBlock * 2
-        || dryDelay.size() < (size_t) (dryMask + 1)
-        || (int) dryDelay.size() < (dryMask + 1) * std::max (1, std::min (2, numChannels)))
-        return;
-
-    // Combien de canaux le moteur peut-il vraiment traiter ?
-    // dryDelay et le stretcher sont dimensionnes par prepare(). Si l'hote
-    // envoie plus de canaux que prevu (instance mono preparte puis relancee en
-    // stereo, changement de bus, wrappers de DAW...), ecrire sans borne
-    // debordait du tas et faisait tomber le DAW. On borne, on traite, puis on
-    // duplique le dernier canal traite sur les canaux restants.
+    //  Un seul moteur pour tous les canaux : gauche et droite reçoivent
+    //  exactement la même correction, un signal mono reste donc parfaitement
+    //  mono. Si l'hôte envoie plus de canaux que prepare() n'en a vus, on borne
+    //  et on duplique (voir PsolaEngine::process).
     const int prepared     = std::max (1, numChannels);
     const int hostChannels = std::max (1, std::min (2, channels));
     const int used         = std::min (hostChannels, prepared);
 
-    // Un bloc plus grand que ce que prepare() a annonce deborderait tmpWet :
-    // on le decoupe en tranches de maxBlock (l'hote a le droit d'envoyer
-    // n'importe quelle taille de bloc).
     int done = 0;
     while (done < numSamples)
     {
-        const int n = std::min (maxBlock, numSamples - done);
-        processChunk (in, out, done, n, used);
+        const int n = std::min (kChunk, numSamples - done);
+
+        // ---- 1. décision de hauteur (tous les 128 échantillons) -------------
+        const PitchDetector::Estimate e = detector.process (in[0] + done, n);
+        updateDecision (e);
+
+        // ---- 2. retard de commande ------------------------------------------
+        //  On écrit la commande courante et on applique celle d'il y a
+        //  ctrlDelayChunks tranches : c'est celle qui décrit le son que le
+        //  moteur est en train de fabriquer.
+        ctrlRatio[(size_t) ctrlPos & (size_t) ctrlMask]  = ratioSm;
+        ctrlPeriod[(size_t) ctrlPos & (size_t) ctrlMask] = periodSm;
+        ++ctrlPos;
+
+        const int readPos = (ctrlPos - 1 - ctrlDelayChunks) & ctrlMask;
+
+        // ---- 3. moteur ------------------------------------------------------
+        PsolaEngine::Control c;
+        c.ratio   = ctrlRatio[(size_t) readPos];
+        c.period  = ctrlPeriod[(size_t) readPos];
+        c.formant = centsToRatio ((double) params.formant * kFormantRangeCents);
+        c.mix     = params.bypass ? 0.0
+                                  : std::min (1.0, std::max (0.0, mixTarget * (double) params.mix));
+
+        const float* ip[2] = { in[0] + done,
+                               used > 1 ? in[1] + done : in[0] + done };
+        float*       op[2] = { out[0] + done,
+                               used > 1 ? out[1] + done : out[0] + done };
+
+        engine.process (ip, op, n, used, c);
         done += n;
     }
 
-    for (int c = used; c < hostChannels; ++c)
-        std::memcpy (out[c], out[used - 1], sizeof (float) * (size_t) numSamples);
-}
-
-void TuneCore::processChunk (const float* const* in, float* const* out, int offset,
-                             int numSamples, int channels)
-{
-    if (numSamples <= 0)
-        return;
-
-    // ---- 1. chemin sec : on retarde l'entrée de la latence du stretcher -----
-    for (int c = 0; c < channels; ++c)
-    {
-        const float* src = in[c] + offset;
-        float* dst = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
-        for (int i = 0; i < numSamples; ++i)
-            dst[(int) ((writePos + i) & dryMask)] = src[i];
-    }
-
-    //  Le stretcher a ete cree avec `numChannels` canaux : il faut lui fournir
-    //  exactement ce nombre de pointeurs. On traite les canaux du stretcher, en
-    //  repetant le dernier canal reel si l'hote en envoie moins.
-    const int stretcherCh = std::max (1, std::min (2, numChannels));
-
-    // ---- 2. a 5. par petits pas de kHop (128 samples = 2.7 ms) -------------
-    //  Avant, la hauteur etait mise a jour UNE fois par bloc : avec des blocs
-    //  de 1024 dans le DAW, la correction arrivait jusqu'a 21 ms en retard et le
-    //  vibrato n'etait corrige qu'a moitie. Mesures hors DAW : mise a jour tous
-    //  les 128 samples = deux fois moins de vibrato residuel.
-    int consumed = 0;
-
-    while (consumed < numSamples)
-    {
-        const int n = std::min (kHop, numSamples - consumed);
-
-        // ---- detection de hauteur (canal 1) --------------------------------
-        estimates.clear();
-        detector.process (in[0] + offset + consumed, n, estimates);
-
-        for (const auto& e : estimates)
-        {
-            pushFrame (e.pos + consumed, e.hz, e.confidence);
-            frames.back().time = writePos + consumed + n;
-        }
-
-        // ---- mise a jour du moteur -----------------------------------------
-        stretcher->setPitchScale (delayedRatio (writePos + consumed + n));
-        stretcher->setFormantScale (formantRatio());
-
-        // ---- envoi au stretcher --------------------------------------------
-        const float* inPtrs[2] = { in[0] + offset + consumed,
-                                   channels > 1 ? in[1] + offset + consumed
-                                                : in[0] + offset + consumed };
-        stretcher->process (inPtrs, (size_t) n, false);
-
-        // ---- recuperation : on vide TOUT dans la FIFO -----------------------
-        //  Ne prendre qu'un bloc par bloc laissait le surplus du demarrage
-        //  definitivement en retard (latence reelle 2048 au lieu de 1280).
-        for (;;)
-        {
-            const int avail = (int) stretcher->available();
-            if (avail <= 0)
-                break;
-
-            const int space = fifoSize - (fifoRead + fifoFill);
-            if (space <= 0)
-                break;                       // FIFO pleine : on reprendra au bloc suivant
-
-            const int take = std::min (avail, space);
-
-            float* chans[2] = { nullptr, nullptr };
-            for (int c = 0; c < stretcherCh; ++c)
-                chans[c] = wetFifo.data() + (size_t) c * (size_t) fifoSize
-                                         + (size_t) (fifoRead + fifoFill);
-
-            stretcher->retrieve (chans, (size_t) take);
-            fifoFill += take;
-        }
-
-        consumed += n;
-    }
-
-    // ---- le bloc sort de la FIFO (zeros uniquement pendant l'amorcage) ------
-    //  On ne sert la FIFO qu'a partir de `serveStart` (arrivee de la premiere
-    //  sortie + marge) : la marge reste donc en reserve et absorbe les livraisons
-    //  par a-coups au lieu de laisser un trou dans le signal.
-    const int zerosFirst = (int) std::max<long long> (0, std::min<long long> (numSamples, serveStart - writePos));
-    const int have = std::min (numSamples - zerosFirst, fifoFill);
-
-    for (int c = 0; c < stretcherCh; ++c)
-    {
-        float* dst = tmpWet.data() + (size_t) c * (size_t) maxBlock;
-        const float* src = wetFifo.data() + (size_t) c * (size_t) fifoSize + (size_t) fifoRead;
-
-        for (int i = 0; i < zerosFirst; ++i)
-            dst[i] = 0.0f;
-
-        std::copy (src, src + have, dst + zerosFirst);
-
-        for (int i = zerosFirst + have; i < numSamples; ++i)
-            dst[i] = 0.0f;
-    }
-
-    fifoRead += have;
-    fifoFill -= have;
-
-    // compactage : la FIFO reste petite, le memmove est rare
-    if (fifoRead > fifoSize / 2)
-    {
-        for (int c = 0; c < stretcherCh; ++c)
-            std::memmove (wetFifo.data() + (size_t) c * (size_t) fifoSize,
-                          wetFifo.data() + (size_t) c * (size_t) fifoSize + (size_t) fifoRead,
-                          sizeof (float) * (size_t) fifoFill);
-
-        fifoRead = 0;
-    }
-
-    totalIn += numSamples;
-
-    // ---- 6. mélange sec / traité + gain ------------------------------------
-    const double m = params.bypass ? 0.0 : (double) params.mix;
+    // ---- 4. gain de sortie ---------------------------------------------------
     const double g = dbToGain ((double) params.outputGainDb);
 
-    for (int c = 0; c < channels; ++c)
-    {
-        const float* dry = dryDelay.data() + (size_t) c * (size_t) (dryMask + 1);
-        const float* wet = tmpWet.data()  + (size_t) c * (size_t) maxBlock;
+    if (std::abs (g - 1.0) > 1.0e-6)
+        for (int c2 = 0; c2 < used; ++c2)
+            for (int i = 0; i < numSamples; ++i)
+                out[c2][i] = (float) ((double) out[c2][i] * g);
 
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const double d = (double) dry[(int) ((writePos + i - latency) & dryMask)];
-            const double w = (double) wet[i];
-            out[c][offset + i] = (float) ((d + (w - d) * m) * g);
-        }
-    }
+    // canaux non traités : duplication du dernier canal (pas de silence)
+    for (int c2 = used; c2 < hostChannels; ++c2)
+        std::memcpy (out[c2], out[used - 1], sizeof (float) * (size_t) numSamples);
 
-    writePos += numSamples;
-
-    // ---- 6 bis. vu-mètres entrée / sortie ----------------------------------
+    // ---- 5. vu-mètres entrée / sortie ---------------------------------------
     {
         double inPk = 0.0, inSq = 0.0, outPk = 0.0, outSq = 0.0;
 
-        for (int c = 0; c < channels; ++c)
-        {
-            const float* src = in[c] + offset;
+        for (int c2 = 0; c2 < used; ++c2)
             for (int i = 0; i < numSamples; ++i)
             {
-                const double x = (double) src[i];
+                const double x = (double) in[c2][i];
                 inPk = std::max (inPk, std::abs (x));
                 inSq += x * x;
 
-                const double y = (double) out[c][offset + i];
+                const double y = (double) out[c2][i];
                 outPk = std::max (outPk, std::abs (y));
                 outSq += y * y;
             }
-        }
 
-        const double n = (double) std::max (1, numSamples * channels);
+        const double n = (double) std::max (1, numSamples * used);
         const double inRmsNow  = std::sqrt (inSq  / n);
         const double outRmsNow = std::sqrt (outSq / n);
 
         // attaque immédiate, relâchement doux (~300 ms)
         const double rel = std::exp (-(double) numSamples / (0.30 * sr));
-        inPeakLin  = std::max (inPk,      inPeakLin  * rel);
-        outPeakLin = std::max (outPk,     outPeakLin * rel);
-        inRmsLin   = std::max (inRmsNow,  inRmsLin   * rel);
-        outRmsLin  = std::max (outRmsNow, outRmsLin  * rel);
+        inPeakLin  = std::max (inPk,     inPeakLin  * rel);
+        outPeakLin = std::max (outPk,    outPeakLin * rel);
+        inRmsLin   = std::max (inRmsNow, inRmsLin   * rel);
+        outRmsLin  = std::max (outRmsNow, outRmsLin * rel);
 
         uiInPeak.store  ((float) linToDb (inPeakLin));
         uiInRms.store   ((float) linToDb (inRmsLin));
         uiOutPeak.store ((float) linToDb (outPeakLin));
         uiOutRms.store  ((float) linToDb (outRmsLin));
-    }
-
-    // ---- 7. informations pour l'interface ----------------------------------
-    if (! frames.empty())
-    {
-        const Frame& f = frames.back();
-        if (f.voiced && f.hz > 0.0)
-        {
-            const double midiF = hzToMidi (f.hz);
-            uiHz.store ((float) f.hz);
-            uiMidi.store ((float) midiF);
-            uiVoiced.store (true);
-            uiTarget.store (f.target);
-            if (f.target >= 0)
-                uiCents.store ((float) ((midiF - (double) f.target) * 100.0));
-            else
-                uiCents.store (0.0f);
-        }
-        else
-        {
-            uiHz.store (0.0f);
-            uiVoiced.store (false);
-            uiTarget.store (-1);
-            uiCents.store (0.0f);
-        }
-        uiRatio.store ((float) currentRatio());
     }
 }
 

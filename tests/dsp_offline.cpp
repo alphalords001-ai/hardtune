@@ -1,14 +1,15 @@
 //  dsp_offline.cpp — tests numériques du moteur, SANS DAW, SANS JUCE.
 //
 //  But : vérifier objectivement la justesse du moteur avant de l'écouter.
-//    - précision de la détection (YIN)
-//    - justesse de la correction (PSOLA)
+//    - précision de la détection (MPM/NSDF)
+//    - justesse de la correction (TD-PSOLA)
 //    - latence réelle annoncée
 //    - transparence quand amount = 0
 //    - absence de NaN / instabilité
 //
 //  Compilation :  g++ -O2 -std=c++17 -I Source/dsp tests/dsp_offline.cpp \
-//                     Source/dsp/PitchDetector.cpp Source/dsp/TuneCore.cpp -o dsp_tests
+//                     Source/dsp/PitchDetector.cpp Source/dsp/PsolaEngine.cpp \
+//                     Source/dsp/TuneCore.cpp -o dsp_tests
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -153,11 +154,11 @@ static bool allFinite (const std::vector<float>& v, double limit = 10.0)
 }
 
 // ---------------------------------------------------------------------------
-//  TEST 1 — précision de la détection YIN
+//  TEST 1 — précision de la détection MPM/NSDF
 // ---------------------------------------------------------------------------
 static void testDetection()
 {
-    std::printf ("\nTEST 1 — detection YIN\n");
+    std::printf ("\nTEST 1 — detection MPM/NSDF (70-1000 Hz)\n");
     const double sr = 48000.0;
     const double freqs[] = { 82.4, 110.0, 146.8, 220.0, 329.6, 440.0, 660.0, 880.0 };
 
@@ -165,18 +166,20 @@ static void testDetection()
     {
         auto sig = makeSine (f, sr, 24000);
         PitchDetector det;
+        det.setRange (70.0, 1000.0);          // plage live imposee
         det.prepare (sr, 1024, 128);
-        det.setRange (80.0, 1200.0);
 
-        std::vector<PitchDetector::Estimate> est;
-        det.process (sig.data(), (int) sig.size(), est);
-
-        // moyenne des estimations valides de la seconde moitié
+        // moyenne des estimations valides de la seconde moitie
         double sum = 0.0; int count = 0;
-        for (size_t i = est.size() / 2; i < est.size(); ++i)
-            if (est[i].hz > 0.0) { sum += est[i].hz; ++count; }
+        for (int pos = 0; pos + 128 <= (int) sig.size(); pos += 128)
+        {
+            const auto ed = det.process (sig.data() + pos, 128);
+            if (! ed.valid || ed.hz <= 0.0) continue;
+            if (pos < 12000) continue;        // on laisse la fenetre se remplir
+            sum += ed.hz; ++count;
+        }
 
-        const double hz = count > 0 ? sum / count : 0.0;
+        const double hz = count > 0 ? sum / (double) count : 0.0;
         const double cents = (hz > 0.0) ? std::abs (ratioToCents (hz / f)) : 9999.0;
 
         char detail[128];
@@ -292,7 +295,7 @@ static RunResult runCore (const std::vector<float>& in, double sr,
 
 static void testPitchCorrection()
 {
-    std::printf ("\nTEST 3 — correction de hauteur (PSOLA)\n");
+    std::printf ("\nTEST 3 — correction de hauteur (TD-PSOLA)\n");
     const double sr = 48000.0;
     const int    N  = 96000;              // 2 s
 
@@ -401,12 +404,10 @@ static void testLatency()
 
     check (std::abs (bestLag - r.latency) <= 120,
            "latence reelle = latence annoncee (ecart <= 2.5 ms)", detail);
-    //  Seuil releve a 60 ms (stretcher 53 ms + marge anti-clic 2,7 ms) : la latence annoncee est desormais la latence
-    //  REELLE (42.7 ms a 48 kHz). Les versions precedentes annonçaient 26.7 ms,
-    //  ce qui etait faux de 16 ms : le DAW ne compensait qu'une partie du retard
-    //  et la voix traitee arrivait en retard sur le reste du projet. Mieux vaut
-    //  annoncer juste et lent que faux et rapide.
-    check (r.latency <= (int) (0.060 * sr), "latence <= 60 ms", detail);
+    //  v0.7.0 : Rubber Band (2080 ech. + FIFO = 56 ms) est remplace par
+    //  TD-PSOLA. La latence ne depend plus que de la geometrie des grains
+    //  (1,5 x periode de 70 Hz + 2 tranches), soit ~24-25 ms a 48 kHz.
+    check (r.latency <= (int) (0.030 * sr), "latence <= 30 ms", detail);
 }
 
 // ---------------------------------------------------------------------------
@@ -716,6 +717,199 @@ static void testMeters()
 }
 
 // ---------------------------------------------------------------------------
+//  TEST 11 — les sibilantes passent en direct (anti-broutage)
+// ---------------------------------------------------------------------------
+static void testSibilantBypass()
+{
+    std::printf ("\nTEST 11 \u2014 sibilantes en direct (anti-broutage)\n");
+    const double sr = 48000.0;
+    const int    N  = 96000;                       // 2 s
+    const int    sibStart = (int) (0.80 * sr);
+    const int    sibEnd   = (int) (1.20 * sr);
+
+    auto in = makeSaw (152.0, sr, N);              // +40 cents : correction nette
+
+    //  « S » synthétique : bruit blanc différentié (énergie dans l'aigu), sans
+    //  aucune périodicité. C'est exactement ce que le détecteur doit refuser.
+    {
+        std::mt19937 rng (777u);
+        std::normal_distribution<float> nd (0.0f, 0.12f);
+        std::vector<float> hiss ((size_t) N, 0.0f);
+        float prev = 0.0f;
+        for (int i = sibStart; i < sibEnd; ++i)
+        {
+            const float n = nd (rng);
+            hiss[(size_t) i] = n - prev;
+            prev = n;
+        }
+        for (int i = sibStart; i < sibEnd; ++i)
+            in[(size_t) i] = hiss[(size_t) i];
+    }
+
+    TuneCore::Params p;
+    p.amount = 1.0f; p.retuneMs = 0.0f; p.formant = 0.0f;
+    auto r = runCore (in, sr, p, 512);
+
+    // 1. la sibilante doit ressortir TELLE QUELLE (simple retard)
+    {
+        const int a = sibStart + 4000;
+        const int b = sibEnd   - 4000;
+        double num = 0.0, d1 = 0.0, d2 = 0.0;
+        for (int i = a; i < b; ++i)
+        {
+            const double x = in[(size_t) (i - r.latency)];
+            const double y = r.out[(size_t) i];
+            num += x * y; d1 += x * x; d2 += y * y;
+        }
+        const double c = num / std::sqrt (std::max (1e-20, d1 * d2));
+        char detail[160];
+        std::snprintf (detail, sizeof (detail),
+                       "correlation entree/sortie sur le \"s\" = %.5f (1.00000 = passe-through)", c);
+        check (c > 0.999, "le \"s\" passe en direct, sans traitement", detail);
+    }
+
+    // 2. la partie voisée reste corrigée (152 Hz -> 155.56 Hz)
+    {
+        const double fOut = measureFreqNear (r.out, (int) (0.35 * sr), 12000, 155.56, sr);
+        const double err  = std::abs (ratioToCents (fOut / 155.56));
+        char detail[160];
+        std::snprintf (detail, sizeof (detail), "152 Hz -> %.1f Hz (cible 155.6, ecart %.1f cents)",
+                       fOut, err);
+        check (err < 25.0, "la partie voisee est bien corrigee", detail);
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  TEST 12 — préservation des formants (pas d'effet « Mickey Mouse »)
+// ---------------------------------------------------------------------------
+static double goertzelMag (const std::vector<float>& x, int start, int len,
+                           double f, double sr)
+{
+    if (start < 0 || start + len > (int) x.size() || len < 16) return 0.0;
+    const double w = 2.0 * kPi * f / sr;
+    const double coef = 2.0 * std::cos (w);
+    double s1 = 0.0, s2 = 0.0;
+    for (int i = 0; i < len; ++i)
+    {
+        const double s0 = (double) x[(size_t) (start + i)] + coef * s1 - s2;
+        s2 = s1; s1 = s0;
+    }
+    const double m = s1 * s1 + s2 * s2 - coef * s1 * s2;
+    return std::sqrt (std::max (0.0, m));
+}
+
+//  Pic spectral par balayage fin : plus fiable que l'autocorrelation globale sur
+//  un signal PSOLA, ou la repetition des grains cree des pics secondaires.
+static double spectralPeak (const std::vector<float>& x, int start, int len,
+                            double lo, double hi, double sr)
+{
+    double bestF = 0.0, bestV = -1.0, prev = 0.0, cur = 0.0;
+    double a = 0.0, b = 0.0, c = 0.0;
+
+    for (double f = lo; f <= hi; f += 2.0)
+    {
+        const double m = goertzelMag (x, start, len, f, sr);
+        if (m > bestV)
+        {
+            bestV = m; bestF = f; a = prev; b = m;
+        }
+        prev = m;
+        cur = f;
+    }
+    (void) cur;
+
+    // affinage : on refait localement autour du pic
+    double fine = bestF, fineBest = -1.0;
+    a = b; c = 0.0;
+    for (double f = bestF - 2.5; f <= bestF + 2.5; f += 0.5)
+    {
+        const double m = goertzelMag (x, start, len, f, sr);
+        if (m > fineBest) { fineBest = m; fine = f; }
+    }
+    (void) a; (void) b; (void) c;
+    return fine;
+}
+
+static void testFormantPreservation()
+{
+    std::printf ("\nTEST 12 \u2014 preservation des formants\n");
+    const double sr = 48000.0;
+    const int    N  = 96000;
+    const double f0in    = 185.0;
+    const double formant = 3000.0;
+
+    //  Voix synthétique : harmoniques 1..24 avec une résonance ÉTROITE à 3 kHz.
+    //  C'est le cas qui trahit le « Mickey Mouse » : un moteur qui rééchantillonne
+    //  déplace le pic du formant avec la hauteur, un moteur PSOLA le laisse en place.
+    std::vector<float> in ((size_t) N, 0.0f);
+    for (int h = 1; h <= 24; ++h)
+    {
+        const double f = f0in * (double) h;
+        if (f > sr * 0.45) break;
+
+        double a = 0.35 / std::pow ((double) h, 1.2);
+        a *= 1.0 + 8.0 * std::exp (-0.5 * std::pow ((f - formant) / 120.0, 2.0));
+
+        for (int i = 0; i < N; ++i)
+            in[(size_t) i] += (float) (a * std::sin (2.0 * kPi * f * (double) i / sr));
+    }
+
+    // normalisation à 0.4 de crête
+    {
+        double pk = 0.0;
+        for (float v : in) pk = std::max (pk, (double) std::abs (v));
+        if (pk > 0.0)
+            for (auto& v : in) v = (float) ((double) v * 0.4 / pk);
+    }
+
+    //  185 Hz est exactement F#3 : pour obtenir un decalage IMPORTANT (le cas ou
+    //  l'effet « Mickey Mouse » se manifeste), on transpose de +4 demi-tons.
+    TuneCore::Params p;
+    p.amount = 1.0f; p.retuneMs = 0.0f; p.formant = 0.0f; p.transpose = 4;
+    auto r = runCore (in, sr, p, 512);
+
+    const double f0out = spectralPeak (r.out, N / 2 - 12000, 24000, 150.0, 400.0, sr);
+    if (f0out < 50.0)
+    {
+        check (false, "hauteur de sortie mesurable", "");
+        return;
+    }
+
+    //  Indice harmonique attendu si les formants sont préservés : le pic reste
+    //  à 3 kHz EN FRÉQUENCE ABSOLUE, donc à l'harmonique 3000/f0_sortie.
+    const int kExpectedPreserved = (int) std::lround (formant / f0out);
+    const int kExpectedResampled = (int) std::lround (formant / f0in);   // défaut « Mickey »
+
+    // amplitude de chaque harmonique de SORTIE, mesurée à k * f0_sortie
+    int   peakK = 0;
+    double peakV = -1.0;
+    double envOut[26] = { 0.0 };
+
+    const int len = 24000, start = N / 2 - len / 2;
+    for (int k = 8; k <= 22; ++k)
+    {
+        envOut[k] = goertzelMag (r.out, start, len, (double) k * f0out, sr);
+        if (envOut[k] > peakV) { peakV = envOut[k]; peakK = k; }
+    }
+
+    double envIn[26] = { 0.0 };
+    int   peakKIn = 0; double peakVIn = -1.0;
+    for (int k = 8; k <= 22; ++k)
+    {
+        envIn[k] = goertzelMag (in, start, len, (double) k * f0in, sr);
+        if (envIn[k] > peakVIn) { peakVIn = envIn[k]; peakKIn = k; }
+    }
+
+    char detail[220];
+    std::snprintf (detail, sizeof (detail),
+                   "f0 %.1f -> %.1f Hz (transpose +4) ; pic entree h=%d ; pic sortie h=%d (attendu %d si preserve, %d si reechantillonne)",
+                   f0in, f0out, peakKIn, peakK, kExpectedPreserved, kExpectedResampled);
+
+    check (peakK == kExpectedPreserved,
+           "le formant reste a 3 kHz (pas d'effet Mickey Mouse)", detail);
+}
+
+// ---------------------------------------------------------------------------
 int main()
 {
     std::printf ("=== Tests hors DAW du moteur de correction ===\n");
@@ -730,6 +924,8 @@ int main()
     testMonoStaysMono();
     testHumanizeVibrato();
     testMeters();
+    testSibilantBypass();
+    testFormantPreservation();
 
     std::printf ("\n=== %s (%d echec(s)) ===\n",
                  gFailures == 0 ? "TOUS LES TESTS PASSENT" : "ECHECS", gFailures);
