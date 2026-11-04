@@ -33,6 +33,7 @@ private:
 
     // ---- en-tête (24,18,1360x60) -------------------------------------------
     juce::Label  titleLabel, keyCap, scaleCap, lightCap, bypassCap;
+    juce::Label  verLabel;   // numero de version affiche : identifie le build
     juce::ComboBox keyBox, scaleBox;
     ht::PillSwitch lightSwitch { "light" }, bypassSwitch { "bypass" };
     juce::TextButton sizeButton { "size" };   // cycle : petit / normal / grand

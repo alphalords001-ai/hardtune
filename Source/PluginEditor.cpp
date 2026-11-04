@@ -25,6 +25,13 @@ HardTuneEditor::HardTuneEditor (HardTuneProcessor& p)
     // ---- en-tête ------------------------------------------------------------
     addAndMakeVisible (titleLabel);
     titleLabel.setText ("ALPHA-TUNE", juce::dontSendNotification);
+
+    //  Numero de version a l'ecran : sans lui, impossible de savoir si le
+    //  DAW charge bien le dernier build ou une copie plus ancienne.
+    addAndMakeVisible (verLabel);
+    verLabel.setText ("v" + juce::String (JucePlugin_VersionString), juce::dontSendNotification);
+    verLabel.setFont (juce::font (13.0f));
+    verLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8fa3ae));
     titleLabel.setFont (ht::font (34.0f, true));
     titleLabel.setColour (juce::Label::textColourId, juce::Colour (0xff0e527d));
 
@@ -239,6 +246,7 @@ void HardTuneEditor::resized()
     juce::ignoreUnused (getWidth(), getHeight());
     // en-tête
     titleLabel.setBounds (44, 24, 220, 44);
+    verLabel.setBounds (700, 40, 140, 20);
     keyCap.setBounds (322, 32, 60, 26);
     keyBox.setBounds (378, 26, 52, 34);
     scaleCap.setBounds (470, 32, 70, 26);
